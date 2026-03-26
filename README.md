@@ -87,10 +87,4 @@ Type characters in terminal 1 — the corresponding input events appear in termi
 
 ## Status
 
-Work in progress. Done:
-- `config/mappings.yaml` — 97 ASCII → SNES mappings
-- `snes_terminal_bridge/config.py` + `mapper.py` — load and query mappings
-- `snes_terminal_bridge/gamepad.py` — virtual SNES controller via uinput
-- `scripts/test_mapping.py` + `scripts/test_gamepad.py` — test scripts
-
-Remaining: `input_capture.py`, `tui.py`, `bridge.py`, `__main__.py`
+The core pipeline is working end-to-end: keyboard input is captured, mapped to SNES buttons, displayed in the TUI, and injected into the virtual gamepad.
