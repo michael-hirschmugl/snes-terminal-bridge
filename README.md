@@ -19,6 +19,8 @@ pip install -r requirements.txt
 
 ### One-time udev setup (required for `/dev/uinput` access without sudo)
 
+The tool creates a virtual gamepad via `/dev/uinput`, a Linux kernel interface for virtual input devices. By default only `root` can access it. The udev rule in this repo assigns `/dev/uinput` to the `input` group and grants group read/write access (`MODE="0660"`), so any user in that group can use it without sudo.
+
 ```bash
 sudo cp udev/99-snes-terminal-bridge.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
@@ -55,6 +57,33 @@ To regenerate `mappings.yaml` from the source spreadsheet:
 pip install odfpy
 python scripts/convert_ods.py
 ```
+
+## Testing
+
+### Mapping testen (ohne Emulator)
+
+```bash
+source .venv/bin/activate
+python scripts/test_mapping.py
+```
+
+Zeigt für jeden eingegebenen Buchstaben die zugehörigen SNES-Buttons an — kein Gamepad nötig.
+
+### Virtuellen Gamepad testen
+
+Terminal 1:
+```bash
+source .venv/bin/activate
+python scripts/test_gamepad.py
+```
+
+Terminal 2 (parallel):
+```bash
+sudo evtest
+# → "SNES Terminal Bridge" in der Liste auswählen
+```
+
+Buchstaben im ersten Terminal eintippen — im zweiten Terminal erscheinen die entsprechenden Input-Events (z.B. `BTN_EAST` für `A`, `ABS_HAT0Y` für D-pad Up).
 
 ## Status
 
