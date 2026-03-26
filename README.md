@@ -58,4 +58,4 @@ python scripts/convert_ods.py
 
 ## Status
 
-Work in progress — see [`docs/plan.md`](docs/plan.md) for the implementation checklist.
+Work in progress.
