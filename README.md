@@ -58,4 +58,9 @@ python scripts/convert_ods.py
 
 ## Status
 
-Work in progress.
+Work in progress. Fertig:
+- `config/mappings.yaml` — 97 ASCII → SNES Mappings
+- `snes_terminal_bridge/config.py` + `mapper.py` — Mapping laden und abfragen
+- `scripts/test_mapping.py` — interaktiver Mapping-Test (ohne Emulator)
+
+Offen: `gamepad.py`, `input_capture.py`, `tui.py`, `bridge.py`
