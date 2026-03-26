@@ -94,12 +94,22 @@ sudo usermod -aG input $USER   # danach neu einloggen
 
 ---
 
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# Für convert_ods.py zusätzlich:
+pip install odfpy
+```
+
 ## Implementierungsschritte
 
 - [x] `docs/plan.md` erstellen
-- [ ] `pyproject.toml` erstellen (deps: `evdev>=1.6`, `pyyaml>=6.0`; dev: `odfpy>=1.4`)
-- [ ] `scripts/convert_ods.py` erstellen — ODS parsen, `config/mappings.yaml` ausgeben
-- [ ] `convert_ods.py` ausführen → `config/mappings.yaml` mit 128 Einträgen generieren
+- [x] `requirements.txt` erstellen (`evdev`, `pyyaml`)
+- [x] `scripts/convert_ods.py` erstellen — ODS parsen, `config/mappings.yaml` ausgeben
+- [x] `convert_ods.py` ausführen → `config/mappings.yaml` mit 97 Einträgen generieren
 - [ ] `snes_terminal_bridge/__init__.py` erstellen
 - [ ] `snes_terminal_bridge/config.py` — mappings.yaml laden/validieren
 - [ ] `snes_terminal_bridge/mapper.py` — char → list[SNESButton] Lookup

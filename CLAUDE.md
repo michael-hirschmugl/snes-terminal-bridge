@@ -83,10 +83,24 @@ dependencies = ["evdev>=1.6", "pyyaml>=6.0"]
 # dev/optional: odfpy>=1.4  (only for convert_ods.py)
 ```
 
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# Für convert_ods.py zusätzlich:
+pip install odfpy
+```
+
 ## Implementation Progress
 
 See `docs/plan.md` for the full checklist. Status as of last session:
 
 - [x] `CLAUDE.md` created
 - [x] `docs/plan.md` created (detailed plan with checkboxes)
-- [ ] Everything else — not yet started
+- [x] `requirements.txt` created
+- [x] `scripts/convert_ods.py` — ODS → YAML converter (inline list style)
+- [x] `config/mappings.yaml` — 97 mappings generated
+- [ ] Python package modules (`config.py`, `mapper.py`, `gamepad.py`, `input_capture.py`, `tui.py`, `bridge.py`, `__main__.py`)
+- [ ] `udev/99-snes-terminal-bridge.rules`
