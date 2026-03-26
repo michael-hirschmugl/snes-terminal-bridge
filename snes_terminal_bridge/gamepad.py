@@ -1,6 +1,11 @@
 import time
 from evdev import UInput, AbsInfo, ecodes as e
 
+# USB IDs of 8Bitdo SN30 — a well-known SNES-style controller that SDL2
+# recognises and maps with the correct SNES button layout out of the box.
+VENDOR  = 0x2dc8
+PRODUCT = 0x9021
+
 # SNES button name → evdev constant
 BUTTON_MAP = {
     "A":      e.BTN_EAST,
@@ -24,6 +29,12 @@ DPAD_MAP = {
 CAPABILITIES = {
     e.EV_KEY: list(BUTTON_MAP.values()),
     e.EV_ABS: [
+        # Classic analog axes — declared at center (128), never moved.
+        # Required by some emulators (e.g. bSNES) to recognise the device
+        # as a proper gamepad rather than a bare joystick.
+        (e.ABS_X,    AbsInfo(value=128, min=0, max=255, fuzz=0, flat=15, resolution=0)),
+        (e.ABS_Y,    AbsInfo(value=128, min=0, max=255, fuzz=0, flat=15, resolution=0)),
+        # D-pad as hat axes — expected by emulators for SNES directional input
         (e.ABS_HAT0X, AbsInfo(value=0, min=-1, max=1, fuzz=0, flat=0, resolution=0)),
         (e.ABS_HAT0Y, AbsInfo(value=0, min=-1, max=1, fuzz=0, flat=0, resolution=0)),
     ],
@@ -32,7 +43,8 @@ CAPABILITIES = {
 
 class Gamepad:
     def __init__(self, name: str = "SNES Terminal Bridge"):
-        self._ui = UInput(CAPABILITIES, name=name, version=0x1)
+        self._ui = UInput(CAPABILITIES, name=name, version=0x1,
+                          vendor=VENDOR, product=PRODUCT)
 
     def press_combo(self, buttons: list[str], hold_ms: int, release_gap_ms: int) -> None:
         """Press all buttons simultaneously, hold, then release."""

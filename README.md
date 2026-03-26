@@ -85,6 +85,20 @@ sudo evtest
 
 Type characters in terminal 1 — the corresponding input events appear in terminal 2 (e.g. `BTN_EAST` for `A`, `ABS_HAT0Y` for D-pad Up).
 
+## Emulator compatibility
+
+| Emulator | Status |
+|---|---|
+| Retroarch + bsnes-mercury core | Works — virtual controller is detected |
+| bSNES standalone | Not working — poor support for virtual input devices |
+
+To install the bsnes-mercury core:
+```bash
+sudo apt install libretro-bsnes-mercury-balanced
+```
+
+Then in Retroarch: **Load Core → bsnes-mercury Balanced**, configure Port 1 controls to use "SNES Terminal Bridge".
+
 ## Status
 
-The core pipeline is working end-to-end: keyboard input is captured, mapped to SNES buttons, displayed in the TUI, and injected into the virtual gamepad.
+The core pipeline is complete: keyboard input is captured, mapped to SNES buttons, displayed in the TUI, and injected into the virtual gamepad. Retroarch integration is working.
