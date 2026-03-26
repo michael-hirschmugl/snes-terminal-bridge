@@ -60,16 +60,16 @@ python scripts/convert_ods.py
 
 ## Testing
 
-### Mapping testen (ohne Emulator)
+### Mapping test (no emulator needed)
 
 ```bash
 source .venv/bin/activate
 python scripts/test_mapping.py
 ```
 
-Zeigt für jeden eingegebenen Buchstaben die zugehörigen SNES-Buttons an — kein Gamepad nötig.
+Shows the corresponding SNES buttons for each character you type.
 
-### Virtuellen Gamepad testen
+### Virtual gamepad test
 
 Terminal 1:
 ```bash
@@ -77,19 +77,20 @@ source .venv/bin/activate
 python scripts/test_gamepad.py
 ```
 
-Terminal 2 (parallel):
+Terminal 2 (in parallel):
 ```bash
 sudo evtest
-# → "SNES Terminal Bridge" in der Liste auswählen
+# → select "SNES Terminal Bridge" from the list
 ```
 
-Buchstaben im ersten Terminal eintippen — im zweiten Terminal erscheinen die entsprechenden Input-Events (z.B. `BTN_EAST` für `A`, `ABS_HAT0Y` für D-pad Up).
+Type characters in terminal 1 — the corresponding input events appear in terminal 2 (e.g. `BTN_EAST` for `A`, `ABS_HAT0Y` for D-pad Up).
 
 ## Status
 
-Work in progress. Fertig:
-- `config/mappings.yaml` — 97 ASCII → SNES Mappings
-- `snes_terminal_bridge/config.py` + `mapper.py` — Mapping laden und abfragen
-- `scripts/test_mapping.py` — interaktiver Mapping-Test (ohne Emulator)
+Work in progress. Done:
+- `config/mappings.yaml` — 97 ASCII → SNES mappings
+- `snes_terminal_bridge/config.py` + `mapper.py` — load and query mappings
+- `snes_terminal_bridge/gamepad.py` — virtual SNES controller via uinput
+- `scripts/test_mapping.py` + `scripts/test_gamepad.py` — test scripts
 
-Offen: `gamepad.py`, `input_capture.py`, `tui.py`, `bridge.py`
+Remaining: `input_capture.py`, `tui.py`, `bridge.py`, `__main__.py`
