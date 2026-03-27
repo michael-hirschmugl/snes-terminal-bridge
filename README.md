@@ -90,15 +90,20 @@ Type characters in terminal 1 — the corresponding input events appear in termi
 | Emulator | Status |
 |---|---|
 | Retroarch + bsnes-mercury core | Works — virtual controller is detected |
-| bSNES standalone | Not working — poor support for virtual input devices |
+| bSNES+ standalone | Not working — ruby input library filters out virtual devices |
 
-To install the bsnes-mercury core:
+### Retroarch setup
+
 ```bash
 sudo apt install libretro-bsnes-mercury-balanced
 ```
 
-Then in Retroarch: **Load Core → bsnes-mercury Balanced**, configure Port 1 controls to use "SNES Terminal Bridge".
+In Retroarch: **Load Core → bsnes-mercury Balanced**, then configure Port 1 controls to use "SNES Terminal Bridge".
+
+### Why bSNES+ doesn't work
+
+bSNES+ uses the ruby input library which enumerates joystick devices via libudev. It filters out devices under `/devices/virtual/` in sysfs — which is where all uinput devices appear, regardless of their reported name or IDs. `lsof` confirms bSNES+ never opens the virtual device at all. The fix requires a source-level change to bSNES+.
 
 ## Status
 
-The core pipeline is complete: keyboard input is captured, mapped to SNES buttons, displayed in the TUI, and injected into the virtual gamepad. Retroarch integration is working.
+The core pipeline is complete: keyboard input is captured, mapped to SNES buttons, displayed in the TUI, and injected into the virtual gamepad. Retroarch integration is working. Next: patch bSNES+ to accept virtual input devices.
