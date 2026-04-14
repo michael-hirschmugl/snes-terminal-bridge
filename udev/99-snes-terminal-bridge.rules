@@ -1,9 +1,0 @@
-# Grant input group access to /dev/uinput (required to create virtual devices)
-KERNEL=="uinput", GROUP="input", MODE="0660"
-
-# Tag our virtual gamepad as a joystick so libudev-based apps (e.g. bSNES)
-# include it in their device enumeration
-SUBSYSTEM=="input", ATTRS{name}=="SNES Terminal Bridge", \
-    ENV{ID_INPUT_JOYSTICK}="1", \
-    ENV{ID_INPUT_KEY}="0", \
-    ENV{ID_INPUT_KEYBOARD}="0"

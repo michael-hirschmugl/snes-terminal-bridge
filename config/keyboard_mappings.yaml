@@ -1,0 +1,25 @@
+# Maps SNES button names to X11 key names injected into the emulator window.
+# Edit to match your emulator's keyboard configuration (Settings → Input in bSNES+).
+#
+# Key names follow X11 / xdotool syntax:
+#   Letters/digits: a, b, z, 1, 2, ...
+#   Special keys:   Return, space, Up, Down, Left, Right, BackSpace, Tab, Escape
+#   Shifted keys:   Use xdotool name, e.g. exclam (!) colon (:) semicolon (;)
+#
+# Find bSNES+ defaults at: Settings → Input → Port 1
+
+window: "bsnes"   # window title substring used to find the emulator (xdotool search --name)
+
+buttons:
+  Up:     Up
+  Down:   Down
+  Left:   Left
+  Right:  Right
+  A:      x        # bSNES+ default for A
+  B:      z        # bSNES+ default for B
+  X:      s        # bSNES+ default for X
+  Y:      a        # bSNES+ default for Y
+  L:      d        # bSNES+ default for L
+  R:      c        # bSNES+ default for R
+  Start:  Return   # bSNES+ default for Start
+  Select: apostrophe  # bSNES+ default for Select

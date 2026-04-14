@@ -1,2 +1,1 @@
-evdev>=1.6
 pyyaml>=6.0

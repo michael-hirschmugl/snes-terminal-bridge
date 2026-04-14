@@ -9,6 +9,7 @@ VALID_BUTTONS = frozenset({
 })
 
 DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "mappings.yaml"
+DEFAULT_KEYBOARD_CONFIG = Path(__file__).parent.parent / "config" / "keyboard_mappings.yaml"
 
 
 @dataclass
@@ -21,6 +22,12 @@ class Settings:
 class Config:
     settings: Settings = field(default_factory=Settings)
     mappings: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class KeyboardConfig:
+    window: str = "bsnes"
+    buttons: dict[str, str] = field(default_factory=dict)
 
 
 def load(path: Path = DEFAULT_CONFIG) -> Config:
@@ -41,3 +48,13 @@ def load(path: Path = DEFAULT_CONFIG) -> Config:
         mappings[str(key)] = buttons
 
     return Config(settings=settings, mappings=mappings)
+
+
+def load_keyboard(path: Path = DEFAULT_KEYBOARD_CONFIG) -> KeyboardConfig:
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+
+    return KeyboardConfig(
+        window=str(raw.get("window", "bsnes")),
+        buttons={str(k): str(v) for k, v in raw.get("buttons", {}).items()},
+    )
