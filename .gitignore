@@ -14,3 +14,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# SNES build outputs
+snes/build/
+snes/assets/font.inc
+snes/assets/tilemap.inc
+snes/tools/.venv/
