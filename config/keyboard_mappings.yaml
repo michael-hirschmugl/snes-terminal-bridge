@@ -22,4 +22,4 @@ buttons:
   L:      d        # bSNES+ default for L
   R:      c        # bSNES+ default for R
   Start:  Return   # bSNES+ default for Start
-  Select: apostrophe  # bSNES+ default for Select
+  Select: u  # bSNES+ default for Select (# key)

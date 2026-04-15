@@ -1,7 +1,6 @@
 import curses
 import queue
 import threading
-import time
 
 from . import config, mapper
 from .keyboard_injector import KeyboardInjector
@@ -35,8 +34,6 @@ def run(stdscr, cfg: config.Config, kb_cfg: config.KeyboardConfig) -> None:
 
             if buttons:
                 injector.press_combo(buttons, cfg.settings.hold_ms, cfg.settings.release_gap_ms)
-
-            time.sleep(2)
 
 
 def main(target_override: str | None = None) -> None:
