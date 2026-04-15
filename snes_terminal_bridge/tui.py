@@ -23,9 +23,11 @@ class TUI:
         self._scr.clear()
         self._draw()
 
-    def update(self, key: str, buttons: list[str] | None) -> None:
+    def update(self, key: str, buttons: list[str] | None, keys: list[str] | None = None) -> None:
         """Add a keypress entry to the log and redraw."""
-        if buttons:
+        if buttons and keys:
+            line = f"  {key!r:<12} →  [{', '.join(buttons)}]  →  {'+'.join(keys)}"
+        elif buttons:
             line = f"  {key!r:<12} →  [{', '.join(buttons)}]"
         else:
             line = f"  {key!r:<12} →  (no mapping)"

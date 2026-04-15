@@ -16,6 +16,7 @@ OBJ     := build/main.o
 ASM_SRC := src/main.asm
 FONT    := assets/font.inc
 TILEMAP := assets/tilemap.inc
+KEYMAP  := assets/keymap.inc
 
 TOOLS_VENV   := tools/.venv
 TOOLS_PYTHON := $(TOOLS_VENV)/bin/python
@@ -30,14 +31,17 @@ $(ROM): $(OBJ) snes.cfg | build
 	@echo "ROM: $@ ($$(wc -c < $@) bytes)"
 
 # ---- Assemble ----
-$(OBJ): $(ASM_SRC) $(FONT) $(TILEMAP) | build
+$(OBJ): $(ASM_SRC) $(FONT) $(TILEMAP) $(KEYMAP) | build
 	ca65 --cpu 65816 -o $@ $<
 
-# ---- Font + tilemap generation ----
-font: $(FONT) $(TILEMAP)
+# ---- Font + tilemap + keymap generation ----
+font: $(FONT) $(TILEMAP) $(KEYMAP)
 
 $(FONT) $(TILEMAP): tools/gen_font.py | $(TOOLS_VENV)
 	$(TOOLS_PYTHON) tools/gen_font.py
+
+$(KEYMAP): tools/gen_keymap.py | $(TOOLS_VENV)
+	$(TOOLS_PYTHON) tools/gen_keymap.py
 
 $(TOOLS_VENV): tools/requirements.txt
 	python3 -m venv $(TOOLS_VENV)

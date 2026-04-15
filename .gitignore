@@ -19,4 +19,5 @@ build/
 snes/build/
 snes/assets/font.inc
 snes/assets/tilemap.inc
+snes/assets/keymap.inc
 snes/tools/.venv/

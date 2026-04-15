@@ -182,15 +182,8 @@ def main() -> None:
             f.write(f"    .byte {', '.join(pairs)}  ; tile {idx}\n")
     print(f"font.inc: {total_tiles} subtiles ({total_tiles * 16} bytes)")
 
-    # --- Build tilemap (32×32 = 1024 entries) ------------------------------
-    tilemap = [0] * (TILEMAP_W * TILEMAP_H)   # default: tile 0 = space
-
-    for C in range(NUM_CHARS):
-        col          = C % COLS
-        row          = C // COLS
-        tilemap_idx  = row * TILEMAP_W + col
-        tile_number  = (C // 8) * 32 + (C % 8) * 2
-        tilemap[tilemap_idx] = tile_number
+    # --- Build tilemap (32×32 = 1024 entries) — all blank (tile 0 = space) --
+    tilemap = [0] * (TILEMAP_W * TILEMAP_H)
 
     # Write tilemap.inc
     with open(tilemap_path_out, "w", encoding="utf-8") as f:
