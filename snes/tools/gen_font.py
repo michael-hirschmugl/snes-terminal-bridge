@@ -42,7 +42,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-FONT_SIZE  = 13     # Adjust if glyphs are too small or clipped
+FONT_SIZE  = 15     # Adjust if glyphs are too small or clipped
 NUM_CHARS  = 95     # ASCII 0x20 (space) through 0x7E (~)
 TILE_PX    = 16     # character cell size in pixels
 COLS       = 16     # characters per display row

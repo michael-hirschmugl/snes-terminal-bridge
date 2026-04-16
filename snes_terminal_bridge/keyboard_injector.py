@@ -54,12 +54,18 @@ class KeyboardInjector:
                 )
 
     def _release_all(self) -> None:
-        """Send keyup for every configured key to clear stuck state."""
-        for key in self._button_map.values():
-            subprocess.run(
-                ["xdotool", "keyup", key],
-                check=False, capture_output=True,
-            )
+        """Send keyup for every configured key to clear stuck state.
+
+        Runs twice with a short delay to ensure the X server and emulator
+        both see the clean (all-released) state before input is accepted.
+        """
+        for _ in range(2):
+            for key in self._button_map.values():
+                subprocess.run(
+                    ["xdotool", "keyup", key],
+                    check=False, capture_output=True,
+                )
+            time.sleep(0.05)  # 50 ms — covers ~3 SNES frames
 
     # ------------------------------------------------------------------
     # Lifecycle

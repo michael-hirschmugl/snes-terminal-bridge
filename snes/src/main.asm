@@ -219,7 +219,14 @@ reset:
     ; -------------------------------------------------------------------------
     lda     pending_flag
     beq     @no_pending
+    stz     pending_flag
 
+    ; Check for delete action (tile sentinel $FFFF)
+    lda     pending_tile_hi
+    cmp     #$FF
+    beq     @do_delete
+
+    ; Normal tile write
     lda     cursor_x
     sta     VMADDL
     stz     VMADDH
@@ -227,13 +234,24 @@ reset:
     sta     VMDATAL
     lda     pending_tile_hi
     sta     VMDATAH
-    stz     pending_flag
 
     ; Advance cursor, stop at column 15
     lda     cursor_x
     cmp     #15
     bcs     @no_pending
     inc     cursor_x
+    bra     @no_pending
+
+@do_delete:
+    ; Move cursor back one column and erase tile with space (tile 0)
+    lda     cursor_x
+    beq     @no_pending
+    dec     cursor_x
+    lda     cursor_x
+    sta     VMADDL
+    stz     VMADDH
+    stz     VMDATAL
+    stz     VMDATAH
 
 @no_pending:
 
@@ -291,8 +309,13 @@ reset:
     ; -------------------------------------------------------------------------
     lda     stable_cnt
     cmp     #2
-    bcc     @main_loop
+    bcs     @stable_ok
+    jmp     @main_loop
+@stable_ok:
 
+    ; -------------------------------------------------------------------------
+    ; Buttons = 0: mark boot_ready and clear last_trig
+    ; -------------------------------------------------------------------------
     ; -------------------------------------------------------------------------
     ; Buttons = 0: mark boot_ready and clear last_trig
     ; -------------------------------------------------------------------------
@@ -311,7 +334,9 @@ reset:
     ; -------------------------------------------------------------------------
 @check_boot:
     lda     boot_ready
-    beq     @main_loop
+    bne     @boot_ok
+    jmp     @main_loop
+@boot_ok:
 
     ; -------------------------------------------------------------------------
     ; Same combo as last trigger: skip (no repeat while held)
