@@ -23,6 +23,7 @@ class KeyboardInjector:
     def __init__(self, window_pattern: str, button_map: dict[str, str]):
         self._window_pattern = window_pattern
         self._button_map = button_map
+        self._release_all()  # clear any keys stuck from a previous session
 
     # ------------------------------------------------------------------
     # Key injection via XTest (no focus switching)
@@ -52,12 +53,20 @@ class KeyboardInjector:
                     check=False, capture_output=True,
                 )
 
+    def _release_all(self) -> None:
+        """Send keyup for every configured key to clear stuck state."""
+        for key in self._button_map.values():
+            subprocess.run(
+                ["xdotool", "keyup", key],
+                check=False, capture_output=True,
+            )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        pass
+        self._release_all()
 
     def __enter__(self):
         return self

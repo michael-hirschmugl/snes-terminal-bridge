@@ -1,5 +1,6 @@
 import curses
 import queue
+import signal
 import threading
 
 from . import config, mapper
@@ -22,6 +23,14 @@ def run(stdscr, cfg: config.Config, kb_cfg: config.KeyboardConfig) -> None:
     capture_thread.start()
 
     with KeyboardInjector(kb_cfg.window, kb_cfg.buttons) as injector:
+        # Release all keys on SIGTERM / SIGHUP (e.g. terminal window closed)
+        def _shutdown(sig, frame):
+            injector.close()
+            stop.set()
+
+        signal.signal(signal.SIGTERM, _shutdown)
+        signal.signal(signal.SIGHUP, _shutdown)
+
         while not stop.is_set():
             try:
                 key = q.get(timeout=0.1)

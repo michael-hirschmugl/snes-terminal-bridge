@@ -70,6 +70,7 @@ cur_joy_hi      = $07   ; JOY1H snapshot this frame
 pending_tile_lo = $08   ; tile number low byte — written to VRAM next VBlank
 pending_tile_hi = $09   ; tile number high byte
 pending_flag    = $0A   ; $01 = tile write pending
+boot_ready      = $0B   ; $01 after first clean frame (all buttons released)
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -107,7 +108,7 @@ reset:
     ; -------------------------------------------------------------------------
     ; Zero direct-page variables $00–$0A
     ; -------------------------------------------------------------------------
-    ldx     #$000A
+    ldx     #$000B
 @zero_dp:
     stz     $00,x
     dex
@@ -293,14 +294,24 @@ reset:
     bcc     @main_loop
 
     ; -------------------------------------------------------------------------
-    ; Buttons = 0: clear last_trig so same combo re-triggers after release
+    ; Buttons = 0: mark boot_ready and clear last_trig
     ; -------------------------------------------------------------------------
     lda     cur_joy_lo
     ora     cur_joy_hi
-    bne     @check_repeat
+    bne     @check_boot
+    lda     #$01
+    sta     boot_ready
     stz     last_trig_lo
     stz     last_trig_hi
     jmp     @main_loop
+
+    ; -------------------------------------------------------------------------
+    ; Ignore all input until we've seen at least one clean (buttons=0) frame.
+    ; This prevents stuck keys from previous sessions showing up on boot.
+    ; -------------------------------------------------------------------------
+@check_boot:
+    lda     boot_ready
+    beq     @main_loop
 
     ; -------------------------------------------------------------------------
     ; Same combo as last trigger: skip (no repeat while held)
@@ -311,7 +322,8 @@ reset:
     bne     @do_lookup
     lda     cur_joy_hi
     cmp     last_trig_hi
-    beq     @main_loop
+    bne     @do_lookup
+    jmp     @main_loop
 
     ; -------------------------------------------------------------------------
     ; New combo — record and search keymap
