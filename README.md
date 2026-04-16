@@ -85,21 +85,17 @@ snes/
 
 The `snes/` subdirectory contains the SNES-side application that runs inside the emulator.
 
-### Current state: joypad visualizer
+### Current state: interactive input line ✅
 
-The ROM currently displays the raw 16-bit joypad state every VBlank (~60 Hz):
+The ROM receives joypad combos from the bridge, looks up the corresponding ASCII character, and displays it on screen. Characters appear left-to-right on the top row, one 16×16 tile per character, up to 16 characters.
 
-- **Row 0:** 16 columns, each showing `*` (button held) or ` ` (released) for one joypad bit
-- **Row 1:** static label row — `B Y S T ^ v < > A X L R - - - -`
+**Protocol:**
+- Each character is encoded as a unique joypad bitmask (combination of SNES buttons held simultaneously for 80 ms)
+- The ROM debounces: the bitmask must be stable for ≥ 2 consecutive VBlanks (~33 ms) before triggering
+- Same combo is not re-triggered until all buttons are released (no key repeat)
+- On match, the tile is written to VRAM at the next VBlank; cursor advances to the next column
 
-Columns 0–7 correspond to `$4219` bits (B, Y, Sel, Start, Up, Down, Left, Right); columns 8–15 to `$4218` (A, X, L, R). This is a debug ROM used to verify that button events from the bridge arrive correctly.
-
-### Next step: interactive input line
-
-The infrastructure for the interactive input line is ready:
-
-- `gen_keymap.py` generates `assets/keymap.inc` — a lookup table mapping each joypad bitmask to a font tile number
-- `main.asm` will be extended with debounce logic, keymap lookup, and VRAM writes to display typed characters left-to-right on row 0
+`gen_keymap.py` generates `assets/keymap.inc` — a lookup table mapping each joypad bitmask to a font tile number, compiled from `config/mappings.yaml`.
 
 ### How the display works
 

@@ -1,22 +1,19 @@
 ; =============================================================================
-; SNES Joypad Visualizer — debug ROM
+; SNES Terminal — interactive input line
 ;
-; Displays the raw joypad state of controller 1 on screen row 0:
+; Reads SNES joypad combos injected by snes-terminal-bridge, looks up the
+; corresponding ASCII tile, and writes it to BG1 row 0 left→right.
 ;
-;   Columns 0–7:  bits 7–0 of $4219 (B, Y, Sel, Start, Up, Down, Left, Right)
-;   Columns 8–15: bits 7–0 of $4218 (A, X, L, R, 0, 0, 0, 0)
-;
-;   '*' = bit set (button pressed)
-;   ' ' = bit clear (button released)
-;
-; Updated every VBlank (~60 Hz) using sequential VRAM writes.
-; No keymap lookup, no debounce — raw signal only.
+; Protocol (handled entirely in hardware/ROM):
+;   - Combo must be stable (unchanged) for ≥ 2 consecutive VBlanks (debounce).
+;   - Same combo is not re-triggered until all buttons are released.
+;   - Cursor advances left→right, stops at column 15.
 ;
 ; VRAM layout:
 ;   $0000–$07FF  BG1 tilemap  (32×32 entries × 2 bytes = 2 KB)
 ;   $1000–$1BFF  Font tiles   (384 subtiles × 16 bytes = 6 KB)
 ;
-; BG mode: Mode 0, BG1 (16×16 tiles, 2bpp, 4 colours)
+; BG mode: Mode 0, BG1, 16×16 tiles, 2bpp, 4 colours
 ; Palette:  colour 0 = black ($0000), colour 1 = white ($7FFF)
 ; =============================================================================
 
@@ -40,8 +37,8 @@ VMDATAL  = $2118
 VMDATAH  = $2119
 HVBJOY   = $4212   ; bit 7: VBlank active, bit 0: auto-joypad busy
 NMITIMEN = $4200
-JOY1L    = $4218   ; controller 1 low  byte: A, X, L, R, 0, 0, 0, 0
-JOY1H    = $4219   ; controller 1 high byte: B, Y, Sel, Start, Up, Dn, Left, Right
+JOY1L    = $4218   ; controller 1 low  byte: A, X, L, R, 0, 0, 0, 0  (bit7=A)
+JOY1H    = $4219   ; controller 1 high byte: B, Y, Sel, Start, Up, Dn, Left, Right (bit7=B)
 DMAP0    = $4300
 BBAD0    = $4301
 A1TL0    = $4302
@@ -58,13 +55,21 @@ FONT_BYTES  = TOTAL_TILES * 16   ; 6144 bytes
 
 TILEMAP_BYTES = 1024 * 2         ; 2048 bytes
 
-; Tile numbers for indicator characters
-TILE_STAR  = 36     ; '*' = ASCII 0x2A → C=10 → tile=(10/8)*32+(10%8)*2 = 36
-TILE_SPACE = 0      ; ' ' = ASCII 0x20 → tile = 0
+; -----------------------------------------------------------------------------
+; Direct-page variables ($00–$0A, zeroed in init)
+; -----------------------------------------------------------------------------
 
-; Direct-page scratch
-joy_hi   = $00      ; byte — snapshot of $4219 while writing
-joy_lo   = $01      ; byte — snapshot of $4218 while writing
+cursor_x        = $00   ; current column (0–15)
+prev_joy_lo     = $01   ; JOY1L from previous frame
+prev_joy_hi     = $02   ; JOY1H from previous frame
+stable_cnt      = $03   ; consecutive frames with same joypad state
+last_trig_lo    = $04   ; JOY1L of last triggered combo
+last_trig_hi    = $05   ; JOY1H of last triggered combo
+cur_joy_lo      = $06   ; JOY1L snapshot this frame
+cur_joy_hi      = $07   ; JOY1H snapshot this frame
+pending_tile_lo = $08   ; tile number low byte — written to VRAM next VBlank
+pending_tile_hi = $09   ; tile number high byte
+pending_flag    = $0A   ; $01 = tile write pending
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -100,6 +105,18 @@ reset:
     stz     NMITIMEN
 
     ; -------------------------------------------------------------------------
+    ; Zero direct-page variables $00–$0A
+    ; -------------------------------------------------------------------------
+    ldx     #$000A
+@zero_dp:
+    stz     $00,x
+    dex
+    bpl     @zero_dp
+
+    sep     #$10                ; X=8-bit
+    .i8
+
+    ; -------------------------------------------------------------------------
     ; Palette: colour 0 = black, colour 1 = white
     ; -------------------------------------------------------------------------
     stz     CGADD
@@ -111,7 +128,7 @@ reset:
     sta     CGDATA
 
     lda     #$80
-    sta     VMAIN
+    sta     VMAIN               ; VRAM increment after VMDATAH write
 
     ; =========================================================================
     ; DMA 1 — tilemap → VRAM $0000
@@ -169,80 +186,63 @@ reset:
     ; =========================================================================
     lda     #$10                ; Mode 0, BG1 16×16 tiles
     sta     BGMODE
-    lda     #$00                ; BG1 tilemap at $0000
+    lda     #$00                ; BG1 tilemap at VRAM $0000
     sta     BG1SC
-    lda     #$01                ; BG1 tile data at $1000
+    lda     #$01                ; BG1 tile data at VRAM $1000
     sta     BG12NBA
     lda     #$01                ; enable BG1
     sta     TM
 
-    ; =========================================================================
-    ; Write label row to tilemap row 1 (VRAM word $0020–$002F)
-    ; Labels: B  Y  S  T  ^  v  <  >  A  X  L  R  -  -  -  -
-    ; =========================================================================
-    lda     #$20                ; word address $0020 = row 1, col 0
-    sta     VMADDL
-    stz     VMADDH
-
-    ; 16-bit A: write each tile word to VMDATAL — the store hits $2118+$2119
-    ; which increments the VRAM address after the $2119 (VMDATAH) write.
-    rep     #$20
-    .a16
-    lda     #132
-    sta     VMDATAL             ; B
-    lda     #226
-    sta     VMDATAL             ; Y
-    lda     #198
-    sta     VMDATAL             ; S  (Select)
-    lda     #200
-    sta     VMDATAL             ; T  (Start)
-    lda     #236
-    sta     VMDATAL             ; ^  (Up)
-    lda     #332
-    sta     VMDATAL             ; v  (Down)
-    lda     #104
-    sta     VMDATAL             ; <  (Left)
-    lda     #108
-    sta     VMDATAL             ; >  (Right)
-    lda     #130
-    sta     VMDATAL             ; A
-    lda     #224
-    sta     VMDATAL             ; X
-    lda     #168
-    sta     VMDATAL             ; L
-    lda     #196
-    sta     VMDATAL             ; R
-    lda     #42
-    sta     VMDATAL             ; - (unused col 12)
-    lda     #42
-    sta     VMDATAL             ; - (unused col 13)
-    lda     #42
-    sta     VMDATAL             ; - (unused col 14)
-    lda     #42
-    sta     VMDATAL             ; - (unused col 15)
-    sep     #$20
-    .a8
-
-    ; Enable auto-joypad read
-    lda     #$01
+    lda     #$01                ; enable auto-joypad read
     sta     NMITIMEN
 
-    lda     #$0F                ; display on
+    lda     #$0F                ; display on, full brightness
     sta     INIDISP
 
 ; =============================================================================
-; Main loop — update row 0 every VBlank with raw joypad bits
+; Main loop
 ; =============================================================================
 
 @main_loop:
 
     ; -------------------------------------------------------------------------
-    ; Wait for VBlank start
+    ; Wait for VBlank start (safest time to write VRAM)
     ; -------------------------------------------------------------------------
 @wait_vblank:
     lda     HVBJOY
     and     #$80
     beq     @wait_vblank
+
+    ; -------------------------------------------------------------------------
+    ; Write pending tile to VRAM
+    ; -------------------------------------------------------------------------
+    lda     pending_flag
+    beq     @no_pending
+
+    lda     cursor_x
+    sta     VMADDL
+    stz     VMADDH
+    lda     pending_tile_lo
+    sta     VMDATAL
+    lda     pending_tile_hi
+    sta     VMDATAH
+    stz     pending_flag
+
+    ; Advance cursor, stop at column 15
+    lda     cursor_x
+    cmp     #15
+    bcs     @no_pending
+    inc     cursor_x
+
+@no_pending:
+
+    ; -------------------------------------------------------------------------
+    ; Wait for VBlank to end before reading joypad
+    ; -------------------------------------------------------------------------
+@wait_active:
+    lda     HVBJOY
+    and     #$80
+    bne     @wait_active
 
     ; -------------------------------------------------------------------------
     ; Wait for auto-joypad read to finish
@@ -252,56 +252,117 @@ reset:
     and     #$01
     bne     @wait_joy
 
+    ; -------------------------------------------------------------------------
     ; Snapshot joypad registers
+    ; -------------------------------------------------------------------------
     lda     JOY1H
-    sta     joy_hi              ; $4219: B,Y,Sel,Start,Up,Dn,Left,Right
+    sta     cur_joy_hi
     lda     JOY1L
-    sta     joy_lo              ; $4218: A,X,L,R,...
+    sta     cur_joy_lo
 
     ; -------------------------------------------------------------------------
-    ; Set VRAM address to tilemap word 0 (row 0, col 0)
+    ; Debounce: compare with previous frame's state
     ; -------------------------------------------------------------------------
-    stz     VMADDL
-    stz     VMADDH
+    lda     cur_joy_lo
+    cmp     prev_joy_lo
+    bne     @state_changed
+    lda     cur_joy_hi
+    cmp     prev_joy_hi
+    bne     @state_changed
+
+    lda     stable_cnt
+    cmp     #$FF                ; cap at 255 to avoid wrap
+    beq     @save_prev
+    inc     stable_cnt
+    bra     @save_prev
+
+@state_changed:
+    stz     stable_cnt
+
+@save_prev:
+    lda     cur_joy_lo
+    sta     prev_joy_lo
+    lda     cur_joy_hi
+    sta     prev_joy_hi
 
     ; -------------------------------------------------------------------------
-    ; Write 8 tiles for $4219 bits (cols 0–7)
+    ; Require stable for >= 2 frames
     ; -------------------------------------------------------------------------
-    ldx     #8
-@loop_hi:
-    asl     joy_hi              ; MSB → carry
-    bcc     @hi_clear
-    lda     #<TILE_STAR
-    sta     VMDATAL
-    lda     #>TILE_STAR
-    sta     VMDATAH
-    bra     @hi_next
-@hi_clear:
-    stz     VMDATAL
-    stz     VMDATAH
-@hi_next:
-    dex
-    bne     @loop_hi
+    lda     stable_cnt
+    cmp     #2
+    bcc     @main_loop
 
     ; -------------------------------------------------------------------------
-    ; Write 8 tiles for $4218 bits (cols 8–15)
+    ; Buttons = 0: clear last_trig so same combo re-triggers after release
     ; -------------------------------------------------------------------------
-    ldx     #8
-@loop_lo:
-    asl     joy_lo              ; MSB → carry
-    bcc     @lo_clear
-    lda     #<TILE_STAR
-    sta     VMDATAL
-    lda     #>TILE_STAR
-    sta     VMDATAH
-    bra     @lo_next
-@lo_clear:
-    stz     VMDATAL
-    stz     VMDATAH
-@lo_next:
-    dex
-    bne     @loop_lo
+    lda     cur_joy_lo
+    ora     cur_joy_hi
+    bne     @check_repeat
+    stz     last_trig_lo
+    stz     last_trig_hi
+    jmp     @main_loop
 
+    ; -------------------------------------------------------------------------
+    ; Same combo as last trigger: skip (no repeat while held)
+    ; -------------------------------------------------------------------------
+@check_repeat:
+    lda     cur_joy_lo
+    cmp     last_trig_lo
+    bne     @do_lookup
+    lda     cur_joy_hi
+    cmp     last_trig_hi
+    beq     @main_loop
+
+    ; -------------------------------------------------------------------------
+    ; New combo — record and search keymap
+    ; -------------------------------------------------------------------------
+@do_lookup:
+    lda     cur_joy_lo
+    sta     last_trig_lo
+    lda     cur_joy_hi
+    sta     last_trig_hi
+
+    rep     #$10                ; X=16-bit for table indexing
+    .i16
+    ldx     #0
+
+@scan_loop:
+    ; Sentinel: bitmask = $0000
+    lda     keymap_data,x
+    ora     keymap_data+1,x
+    beq     @not_found
+
+    ; Compare bitmask low byte with cur_joy_lo (JOY1L snapshot)
+    lda     keymap_data,x
+    cmp     cur_joy_lo
+    bne     @next_entry
+
+    ; Compare bitmask high byte with cur_joy_hi (JOY1H snapshot)
+    lda     keymap_data+1,x
+    cmp     cur_joy_hi
+    bne     @next_entry
+
+    ; Match — queue tile for next VBlank write
+    lda     keymap_data+2,x
+    sta     pending_tile_lo
+    lda     keymap_data+3,x
+    sta     pending_tile_hi
+    lda     #$01
+    sta     pending_flag
+    sep     #$10
+    .i8
+    jmp     @main_loop
+
+@next_entry:
+    inx
+    inx
+    inx
+    inx
+    jmp     @scan_loop
+
+@not_found:
+    sep     #$10
+    .i8
     jmp     @main_loop
 
 ; -----------------------------------------------------------------------------
@@ -315,6 +376,9 @@ tilemap_data:
 
 font_tiles:
 .include "../assets/font.inc"
+
+keymap_data:
+.include "../assets/keymap.inc"
 
 ; -----------------------------------------------------------------------------
 ; SNES internal header  ($FFC0–$FFE3)
