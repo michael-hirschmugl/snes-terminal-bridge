@@ -226,8 +226,11 @@ reset:
     cmp     #$FF
     beq     @do_delete
 
-    ; Normal tile write
+    ; Normal tile write — skip if line full (cursor_x = 16 = past last column)
     lda     cursor_x
+    cmp     #16
+    bcs     @no_pending
+
     sta     VMADDL
     stz     VMADDH
     lda     pending_tile_lo
@@ -235,10 +238,7 @@ reset:
     lda     pending_tile_hi
     sta     VMDATAH
 
-    ; Advance cursor, stop at column 15
-    lda     cursor_x
-    cmp     #15
-    bcs     @no_pending
+    ; Advance cursor; 16 means "past end / line full"
     inc     cursor_x
     bra     @no_pending
 
