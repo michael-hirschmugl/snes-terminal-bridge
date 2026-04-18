@@ -1,20 +1,24 @@
 ; =============================================================================
-; SNES Terminal — interactive input line
+; SNES Terminal — interactive multi-row input, Mode 1
 ;
 ; Reads SNES joypad combos injected by snes-terminal-bridge, looks up the
-; corresponding ASCII tile, and writes it to BG1 row 0 left→right.
+; corresponding ASCII tile, and writes it to BG1 in a scrolling 32×14 grid.
 ;
 ; Protocol (handled entirely in hardware/ROM):
 ;   - Combo must be stable (unchanged) for ≥ 2 consecutive VBlanks (debounce).
 ;   - Same combo is not re-triggered until all buttons are released.
-;   - Cursor advances left→right, stops at column 15.
+;   - Cursor advances left→right, wraps to next row at column 32.
+;   - KEY_ENTER ($FFFE) moves to a new row; viewport scrolls when needed.
+;   - KEY_DELETE ($FFFF) erases the last character.
 ;
 ; VRAM layout:
-;   $0000–$07FF  BG1 tilemap  (32×32 entries × 2 bytes = 2 KB)
-;   $1000–$1BFF  Font tiles   (384 subtiles × 16 bytes = 6 KB)
+;   $0000–$1FFF  BG1 tilemap  (64×64 entries × 2 bytes = 8 KB)
+;   $2000–$37BF  Font tiles   (190 tiles × 32 bytes = 6080 bytes)
 ;
-; BG mode: Mode 0, BG1, 16×16 tiles, 2bpp, 4 colours
-; Palette:  colour 0 = black ($0000), colour 1 = white ($7FFF)
+; BG mode:    Mode 1 (256×224), BG1 only, 8×8 tiles, 4bpp
+; Characters: 8px wide × 16px tall (2 stacked 8×8 tiles: top + bottom)
+; Grid:       32 columns × 14 visible rows (32-row circular buffer)
+; Palette:    colour 0 = black ($0000), colour 1 = white ($7FFF)
 ; =============================================================================
 
 .setcpu "65816"
@@ -26,8 +30,15 @@
 INIDISP  = $2100
 BGMODE   = $2105
 BG1SC    = $2107
+BG2SC    = $2108
 BG12NBA  = $210B
-TM       = $212C
+BG1HOFS  = $210D   ; BG1 horizontal scroll (write twice: low then high byte)
+BG1VOFS  = $210E   ; BG1 vertical scroll  (write twice: low then high byte)
+BG2HOFS  = $210F   ; BG2 horizontal scroll (write twice: low then high byte)
+BG2VOFS  = $2110   ; BG2 vertical scroll  (write twice: low then high byte)
+TM       = $212C   ; main screen enable (even hires pixels in Mode 5)
+TMW      = $212D   ; sub screen enable  (odd  hires pixels in Mode 5)
+SETINI   = $2133   ; display settings: bit 3 = hi-res mode enable
 CGADD    = $2121
 CGDATA   = $2122
 VMAIN    = $2115
@@ -49,17 +60,17 @@ DAS0H    = $4306
 MDMAEN   = $420B
 
 ; Tile data constants (must match gen_font.py)
-NUM_GROUPS  = 12
-TOTAL_TILES = NUM_GROUPS * 32
-FONT_BYTES  = TOTAL_TILES * 16   ; 6144 bytes
+TOTAL_CHARS   = 95
+TOTAL_TILES   = TOTAL_CHARS * 2   ; 190 (top + bottom per char)
+FONT_BYTES    = TOTAL_TILES * 32  ; 6080 (BG1 4bpp, 32 bytes/tile)
 
-TILEMAP_BYTES = 1024 * 2         ; 2048 bytes
+TILEMAP_BYTES = 4096 * 2          ; 8192 (64×64 tilemap)
 
 ; -----------------------------------------------------------------------------
-; Direct-page variables ($00–$0A, zeroed in init)
+; Direct-page variables ($00–$0F, zeroed in init)
 ; -----------------------------------------------------------------------------
 
-cursor_x        = $00   ; current column (0–15)
+cursor_x        = $00   ; current column (0–31)
 prev_joy_lo     = $01   ; JOY1L from previous frame
 prev_joy_hi     = $02   ; JOY1H from previous frame
 stable_cnt      = $03   ; consecutive frames with same joypad state
@@ -71,6 +82,9 @@ pending_tile_lo = $08   ; tile number low byte — written to VRAM next VBlank
 pending_tile_hi = $09   ; tile number high byte
 pending_flag    = $0A   ; $01 = tile write pending
 boot_ready      = $0B   ; $01 after first clean frame (all buttons released)
+cursor_y        = $0C   ; current character row (0–31, circular)
+top_vram_row    = $0D   ; topmost visible character row (0–31)
+addr_scratch    = $0E   ; 16-bit VRAM address scratch ($0E=low, $0F=high)
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -84,6 +98,78 @@ cop_handler:
 brk_handler:
 abort_handler:
     rti
+
+; =============================================================================
+; calc_addr_top — compute VRAM word address for the top tile of the character
+;                 at (cursor_x, cursor_y) and store in addr_scratch.
+;
+; Call with 8-bit A (routine switches to 16-bit internally and restores 8-bit).
+; X register width is not changed.
+;
+; Formula:
+;   tile_row_top = cursor_y * 2
+;   addr = screen_y_off + screen_x_off + (tile_row_top & $1F) * 32 + (cursor_x & $1F)
+;   screen_y_off = $0800 if cursor_y >= 16, else $0000
+;   screen_x_off = $0400 if cursor_x >= 32, else $0000
+;
+; addr_bot = addr_scratch + 32  (caller adds $0020 when needed)
+; =============================================================================
+
+calc_addr_top:
+    rep  #$20
+    .a16
+
+    ; screen_y_off: $0800 when cursor_y >= 16
+    lda  cursor_y
+    and  #$00FF
+    cmp  #$0010
+    bcc  @no_y_off
+    lda  #$0800
+    bra  @y_off_done
+@no_y_off:
+    lda  #$0000
+@y_off_done:
+    sta  addr_scratch
+
+    ; (tile_row_top & $1F) * 32  =  (cursor_y * 2 & $1F) << 5
+    lda  cursor_y
+    and  #$00FF
+    asl                  ; * 2 = tile_row_top (0–62)
+    and  #$001F          ; & $1F (0–30)
+    asl
+    asl
+    asl
+    asl
+    asl                  ; * 32
+    clc
+    adc  addr_scratch
+    sta  addr_scratch
+
+    ; screen_x_off: $0400 when cursor_x >= 32
+    lda  cursor_x
+    and  #$00FF
+    cmp  #$0020
+    bcc  @no_x_off
+    lda  addr_scratch
+    clc
+    adc  #$0400
+    sta  addr_scratch
+@no_x_off:
+
+    ; + (cursor_x & $1F)
+    lda  cursor_x
+    and  #$001F
+    clc
+    adc  addr_scratch
+    sta  addr_scratch
+
+    sep  #$20
+    .a8
+    rts
+
+; =============================================================================
+; reset
+; =============================================================================
 
 reset:
     sei
@@ -106,9 +192,10 @@ reset:
     stz     NMITIMEN
 
     ; -------------------------------------------------------------------------
-    ; Zero direct-page variables $00–$0A
+    ; Zero direct-page variables $00–$0F
     ; -------------------------------------------------------------------------
-    ldx     #$000B
+    ldx     #$000F
+    .i16
 @zero_dp:
     stz     $00,x
     dex
@@ -159,7 +246,7 @@ reset:
     sta     MDMAEN
 
     ; =========================================================================
-    ; DMA 2 — font tiles → VRAM $1000
+    ; DMA 2 — BG1 4bpp font tiles → VRAM word $1000 (byte $2000)
     ; =========================================================================
     stz     VMADDL
     lda     #$10
@@ -185,14 +272,22 @@ reset:
     ; =========================================================================
     ; BG configuration
     ; =========================================================================
-    lda     #$10                ; Mode 0, BG1 16×16 tiles
+    stz     SETINI              ; no hi-res
+    lda     #$01                ; Mode 1, 8×8 tiles
     sta     BGMODE
-    lda     #$00                ; BG1 tilemap at VRAM $0000
+    lda     #$03                ; tilemap at VRAM $0000, 64×64
     sta     BG1SC
-    lda     #$01                ; BG1 tile data at VRAM $1000
+    lda     #$01                ; BG1 tiles at word $1000 (byte $2000)
     sta     BG12NBA
-    lda     #$01                ; enable BG1
+    lda     #$01                ; BG1 on main screen
     sta     TM
+    stz     TMW                 ; nothing on sub screen
+
+    ; Scroll = 0
+    stz     BG1HOFS
+    stz     BG1HOFS
+    stz     BG1VOFS
+    stz     BG1VOFS
 
     lda     #$01                ; enable auto-joypad read
     sta     NMITIMEN
@@ -218,40 +313,250 @@ reset:
     ; Write pending tile to VRAM
     ; -------------------------------------------------------------------------
     lda     pending_flag
-    beq     @no_pending
+    bne     :+
+    jmp     @no_pending
+:
     stz     pending_flag
 
-    ; Check for delete action (tile sentinel $FFFF)
+    ; Check for special action (pending_tile_hi = $FF)
     lda     pending_tile_hi
     cmp     #$FF
-    beq     @do_delete
+    bne     @normal_tile
 
-    ; Normal tile write — skip if line full (cursor_x = 16 = past last column)
-    lda     cursor_x
-    cmp     #16
-    bcs     @no_pending
-
-    sta     VMADDL
-    stz     VMADDH
+    ; Special: distinguish by low byte
     lda     pending_tile_lo
+    cmp     #$FF
+    beq     @do_delete
+    cmp     #$FE
+    bne     :+
+    jmp     @do_newline
+:
+    jmp     @no_pending          ; unknown sentinel
+
+    ; -----------------------------------------------------------------------
+    ; Normal character write — two tiles (top + bottom)
+    ; -----------------------------------------------------------------------
+@normal_tile:
+    lda     cursor_x
+    cmp     #32
+    bcc     :+
+    jmp     @no_pending          ; line full, newline still pending
+:
+    jsr     calc_addr_top        ; → addr_scratch = addr of top tile
+
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL               ; sets VMADDL + VMADDH (16-bit write)
+    sep     #$20
+    .a8
+
+    lda     pending_tile_lo      ; tile_top = C * 2
+    sta     VMDATAL
+    lda     pending_tile_hi      ; = $00 for normal chars
+    sta     VMDATAH
+
+    ; bottom tile at addr_scratch + 32
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    clc
+    adc     #$0020
+    sta     VMADDL
+    sep     #$20
+    .a8
+
+    lda     pending_tile_lo
+    inc     a                    ; tile_bot = tile_top + 1
     sta     VMDATAL
     lda     pending_tile_hi
     sta     VMDATAH
 
-    ; Advance cursor; 16 means "past end / line full"
+    ; advance cursor; 32 = line full → queue newline for next VBlank
     inc     cursor_x
-    bra     @no_pending
+    lda     cursor_x
+    cmp     #32
+    bcs     :+
+    jmp     @no_pending
+:
+    ; line full → queue KEY_ENTER sentinel ($FFFE)
+    lda     #$FE
+    sta     pending_tile_lo
+    lda     #$FF
+    sta     pending_tile_hi
+    lda     #$01
+    sta     pending_flag
+    jmp     @no_pending
 
+    ; -----------------------------------------------------------------------
+    ; KEY_DELETE — erase last character (both top + bottom tiles → tile 0)
+    ; -----------------------------------------------------------------------
 @do_delete:
-    ; Move cursor back one column and erase tile with space (tile 0)
     lda     cursor_x
-    beq     @no_pending
+    bne     :+
+    jmp     @no_pending
+:
     dec     cursor_x
-    lda     cursor_x
+    jsr     calc_addr_top
+
+    rep     #$20
+    .a16
+    lda     addr_scratch
     sta     VMADDL
-    stz     VMADDH
+    sep     #$20
+    .a8
+    stz     VMDATAL              ; tile 0 = space (top)
+    stz     VMDATAH
+
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    clc
+    adc     #$0020
+    sta     VMADDL
+    sep     #$20
+    .a8
+    stz     VMDATAL              ; tile 0 = space (bottom)
+    stz     VMDATAH
+    jmp     @no_pending
+
+    ; -----------------------------------------------------------------------
+    ; KEY_ENTER — advance to next character row, scroll viewport if needed,
+    ;             clear the new row in VRAM (128 tile writes in 4 sections)
+    ; -----------------------------------------------------------------------
+@do_newline:
+    ; cursor_y = (cursor_y + 1) & $1F
+    lda     cursor_y
+    inc     a
+    and     #$1F
+    sta     cursor_y
+
+    ; visible_offset = (cursor_y - top_vram_row) & $1F
+    ; if >= 14: scroll viewport
+    sec
+    sbc     top_vram_row
+    and     #$1F
+    cmp     #14
+    bcc     @newline_no_scroll
+
+    ; top_vram_row = (cursor_y - 13) & $1F
+    lda     cursor_y
+    sec
+    sbc     #13
+    and     #$1F
+    sta     top_vram_row
+
+    ; BG1VOFS = top_vram_row * 16  (max 31*16 = 496 = $01F0, 9 bits)
+    rep     #$20
+    .a16
+    lda     top_vram_row
+    and     #$00FF
+    asl
+    asl
+    asl
+    asl                          ; * 16
+    sep     #$20
+    .a8
+    sta     BG1VOFS              ; low byte
+    xba
+    sta     BG1VOFS              ; high byte
+@newline_no_scroll:
+
+    ; --- Clear new VRAM row: 4 sections of 32 sequential writes each ---
+    ; tile_row_top = cursor_y * 2
+    ; Section A: top tile row,    cols  0–31  → screen 0 or 2
+    ; Section B: top tile row,    cols 32–63  → screen 1 or 3  (+$400)
+    ; Section C: bottom tile row, cols  0–31  → +32 from A
+    ; Section D: bottom tile row, cols 32–63  → +$400 from C
+
+    rep     #$20
+    .a16
+    lda     cursor_y
+    and     #$00FF
+    asl                          ; tile_row_top = cursor_y * 2
+    pha                          ; save tile_row_top
+
+    and     #$001F               ; tile_row_top & $1F
+    asl
+    asl
+    asl
+    asl
+    asl                          ; * 32  = row offset within screen
+    sta     addr_scratch
+
+    pla                          ; restore tile_row_top
+    cmp     #$0020               ; tile_row_top >= 32?
+    bcc     @cl_no_y
+    lda     addr_scratch
+    clc
+    adc     #$0800
+    sta     addr_scratch
+@cl_no_y:
+    ; addr_scratch = Section A base (top tile row, left half)
+
+    ; Section A
+    lda     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    ldx     #32
+@cl_A:
     stz     VMDATAL
     stz     VMDATAH
+    dex
+    bne     @cl_A
+
+    ; Section B (+$400)
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    clc
+    adc     #$0400
+    sta     VMADDL
+    sep     #$20
+    .a8
+    ldx     #32
+@cl_B:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @cl_B
+
+    ; Section C (bottom tile row, left half = addr_scratch + 32)
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    clc
+    adc     #$0020
+    sta     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    ldx     #32
+@cl_C:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @cl_C
+
+    ; Section D (bottom tile row, right half = addr_scratch + $400)
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    clc
+    adc     #$0400
+    sta     VMADDL
+    sep     #$20
+    .a8
+    ldx     #32
+@cl_D:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @cl_D
+
+    stz     cursor_x
+    bra     @no_pending          ; fall through to @no_pending
 
 @no_pending:
 
@@ -290,7 +595,7 @@ reset:
     bne     @state_changed
 
     lda     stable_cnt
-    cmp     #$FF                ; cap at 255 to avoid wrap
+    cmp     #$FF                 ; cap at 255 to avoid wrap
     beq     @save_prev
     inc     stable_cnt
     bra     @save_prev
@@ -313,9 +618,6 @@ reset:
     jmp     @main_loop
 @stable_ok:
 
-    ; -------------------------------------------------------------------------
-    ; Buttons = 0: mark boot_ready and clear last_trig
-    ; -------------------------------------------------------------------------
     ; -------------------------------------------------------------------------
     ; Buttons = 0: mark boot_ready and clear last_trig
     ; -------------------------------------------------------------------------
@@ -359,7 +661,7 @@ reset:
     lda     cur_joy_hi
     sta     last_trig_hi
 
-    rep     #$10                ; X=16-bit for table indexing
+    rep     #$10                 ; X=16-bit for table indexing
     .i16
     ldx     #0
 

@@ -9,6 +9,7 @@ Outputs:
 
 Special tile values (not real tiles, handled by ROM):
   $FFFF — delete/backspace: move cursor back and erase last character
+  $FFFE — newline/enter: advance to next row, scroll if needed
 
 Button bitmask layout (SNES $4218/$4219 as 16-bit word, high byte = $4218):
   bit 15  B       bit 14  Y       bit 13  Select  bit 12  Start
@@ -17,7 +18,7 @@ Button bitmask layout (SNES $4218/$4219 as 16-bit word, high byte = $4218):
 
 Tile number for ASCII char c (must match gen_font.py):
   C = ord(c) - 0x20
-  tile = (C // 8) * 32 + (C % 8) * 2
+  tile = C * 2  (top tile; bottom tile = C * 2 + 1, written by ROM automatically)
 
 Usage (from snes/ directory):
     make font
@@ -53,7 +54,7 @@ def combo_to_bitmask(buttons: list[str]) -> int:
 
 def char_to_tile(c: str) -> int:
     C = ord(c) - 0x20
-    return (C // 8) * 32 + (C % 8) * 2
+    return C * 2
 
 
 def main() -> None:
@@ -78,6 +79,7 @@ def main() -> None:
     # Special keys: name → tile sentinel value
     SPECIAL_ACTIONS = {
         'KEY_DELETE': 0xFFFF,  # backspace: erase last char, move cursor back
+        'KEY_ENTER':  0xFFFE,  # newline: advance to next row, scroll if needed
     }
 
     entries = []
@@ -109,7 +111,7 @@ def main() -> None:
             f.write(f"    .word ${bitmask:04X}, ${tile:04X}  ; {display!s:<12} {btn_str}\n")
         f.write("    .word $0000, $0000  ; sentinel\n")
 
-    special_count = sum(1 for _, t, _, _ in entries if t == 0xFFFF)
+    special_count = sum(1 for _, t, _, _ in entries if t >= 0xFFFE)
     char_count    = len(entries) - special_count
     print(f"keymap.inc: {char_count} chars + {special_count} special, {len(skipped)} skipped ({', '.join(skipped)})")
 
