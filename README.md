@@ -153,6 +153,32 @@ make clean    # remove build/
 
 The output `build/terminal.sfc` is a LoROM SNES ROM, exactly 32768 bytes.
 
+### ROM header and hardware notes
+
+The generated ROM is configured as a standard **PAL LoROM** image and is suitable for running from a flash cartridge.
+
+- **Title (21 bytes):** `SNES TERMINAL`
+- **Map mode:** `0x20` (LoROM, SlowROM)
+- **Cartridge type:** `0x00` (ROM only)
+- **ROM size field:** `0x08` (32 KiB)
+- **SRAM size field:** `0x00` (no cartridge SRAM declared)
+- **Destination code:** `0x02` (Europe / PAL)
+
+If `SRAM size` remains `0x00`, the ROM does not use save RAM yet.
+
+About `.srm` files in emulators:
+- `.srm` represents cartridge save RAM (SRAM), not SNES internal WRAM.
+- Deleting `.srm` only removes stored save content.
+- Whether bsnes reports a RAM board depends on ROM metadata/heuristics, not on the presence of `.srm` alone.
+
+If you later add SRAM support, update the SRAM size field and implement explicit SRAM read/write logic in `snes/src/main.asm`.
+
+Before flashing to real hardware:
+- Rebuild from a clean state: `cd snes && make clean && make`
+- Verify ROM size is exactly 32768 bytes (`build/terminal.sfc`)
+- Use a PAL console profile on your flash cartridge / setup
+- Test first in bsnes: ROM should be detected as `LOROM` and region `PAL`
+
 ---
 
 ## Requirements

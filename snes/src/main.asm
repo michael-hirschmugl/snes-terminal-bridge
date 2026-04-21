@@ -724,17 +724,16 @@ keymap_data:
 ; -----------------------------------------------------------------------------
 
 .segment "HEADER"
-    .byte "SNES TERMINAL       "
-    .byte $20
-    .byte $00
-    .byte $05
-    .byte $00
-    .byte $01
-    .byte $00
-    .byte $00
-    .word $FFFF
-    .word $0000
-    .byte $00, $00, $00, $00
+    .byte "SNES TERMINAL        "
+    .byte $20                    ; map mode: LoROM, SlowROM
+    .byte $00                    ; cartridge type: ROM only
+    .byte $08                    ; ROM size exponent: 32 KiB image
+    .byte $00                    ; SRAM size: none
+    .byte $02                    ; destination code: Europe (PAL)
+    .byte $00                    ; old licensee code (Nintendo)
+    .byte $00                    ; version
+    .word $FFFF                  ; checksum complement (placeholder)
+    .word $0000                  ; checksum (placeholder)
 
 ; -----------------------------------------------------------------------------
 ; Interrupt vectors  ($FFE4–$FFFF)
