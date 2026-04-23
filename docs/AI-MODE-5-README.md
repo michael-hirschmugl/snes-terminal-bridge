@@ -488,3 +488,46 @@ pixel art rather than a generated image.
 If all ten are "yes", the ROM should render correctly on hardware and
 in the emulator output window. The bsnes-plus Tilemap Viewer ghosting
 (section 8) is expected and benign.
+
+---
+
+## 11. Real-hardware pitfalls (Everdrive / flash cart)
+
+Two issues that cause a black screen on real hardware but are invisible
+in bsnes (which initialises all registers to 0 at power-on):
+
+### 11.1 ROM size byte in the SNES header (`$FFD7`)
+
+The Everdrive uses `$FFD7` to choose its internal LoROM mapping:
+
+| Header byte | Everdrive display | Result |
+|---|---|---|
+| `$08` | "512k" | 32 KiB ROM mirrored correctly across all banks ✓ |
+| `$05` | "8m" | ROM placed at wrong address in 8 Mbit space → CPU reads garbage → black screen ✗ |
+
+`$05` is what the SNES spec says for a 32 KiB ROM (`2^5 KiB`), but
+Everdrive firmware does not handle it correctly for LoROM. Use `$08`.
+The S-CPU itself never reads `$FFD7` — it only matters to the flash
+cart.
+
+### 11.2 Uninitialised PPU registers
+
+bsnes resets all PPU registers to `$00`; real hardware leaves them
+undefined. Mode 5 with `TM = TS = $02` (BG2 on both screens) is
+uniquely vulnerable because any register that references BG2 can kill
+the display. Critical registers to zero-initialise **before**
+releasing force-blank:
+
+| Register | Address | Why it matters in Mode 5 |
+|---|---|---|
+| `CGADSUB` | `$2131` | Bit 7=1 (subtract) + bit 1=1 (BG2) → BG2_main − BG2_sub = 0 (same layer on both screens → every pixel cancels to black) |
+| `CGWSEL` | `$2130` | Controls when colour math applies; garbage can enable subtraction unconditionally |
+| `TMW` | `$212E` | Bit 1=1 → BG2 window-masked on main screen → invisible |
+| `TSW` | `$212F` | Bit 1=1 → BG2 window-masked on sub screen |
+| `W12SEL` | `$2123` | BG1/BG2 window enable bits; if set, feeds into TMW/TSW masking |
+| `W34SEL` | `$2124` | BG3/BG4 window enable bits |
+
+In Mode 1 (single BG1, `TS = $00`) most of these registers are
+harmless because BG2 is not on any screen. In Mode 5 they all become
+load-bearing. `main.asm` zeroes all six registers explicitly — do not
+remove those `stz` instructions.

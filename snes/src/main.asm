@@ -49,6 +49,10 @@ CGADD    = $2121
 CGDATA   = $2122
 TM       = $212C   ; main screen enable (odd hires pixels in Mode 5)
 TS       = $212D   ; sub  screen enable (even hires pixels in Mode 5)
+TMW      = $212E   ; window masking for main screen (must be 0 — see init)
+TSW      = $212F   ; window masking for sub  screen (must be 0 — see init)
+CGWSEL   = $2130   ; color math window select       (must be 0 — see init)
+CGADSUB  = $2131   ; color math designation         (must be 0 — see init)
 SETINI   = $2133   ; display settings: bit 0 = interlace enable
 WMDATA   = $2180
 WMADDL   = $2181
@@ -349,6 +353,17 @@ reset:
     sta     TM
     lda     #$02                ; BG2 on sub  screen (even hires columns)
     sta     TS
+
+    ; Real hardware leaves these undefined; emulators default to 0.
+    ; TMW/TSW: if bit 1 is set, BG2 gets window-masked -> black screen.
+    ; CGADSUB: bit 7=1 (subtract) + bit 1=1 (BG2) means BG2_main - BG2_sub = 0
+    ;   because TM and TS both show BG2, so every pixel cancels to black.
+    stz     TMW                 ; no window masking on main screen
+    stz     TSW                 ; no window masking on sub  screen
+    stz     CGWSEL              ; no color-math windowing
+    stz     CGADSUB             ; no color math (addition / subtraction)
+    stz     $2123               ; W12SEL: no BG1/BG2 window enables
+    stz     $2124               ; W34SEL: no BG3/BG4 window enables
 
     lda     #$01                ; enable auto-joypad read
     sta     NMITIMEN
@@ -703,7 +718,11 @@ keymap_data:
     .byte "SNES TERMINAL        "
     .byte $20                    ; map mode: LoROM, SlowROM
     .byte $00                    ; cartridge type: ROM only
-    .byte $05                    ; ROM size: 2^5 KiB = 32 KiB
+    .byte $08                    ; ROM size: $08 required for Everdrive LoROM mapping
+                                 ; ($05 = 32 KiB per SNES spec, but Everdrive maps
+                                 ; it as "8m" and places ROM at wrong address; $08
+                                 ; makes Everdrive select "512k" mapping, which
+                                 ; correctly mirrors the 32 KiB ROM)
     .byte $00                    ; RAM size: 0
     .byte $02                    ; destination code: Europe (PAL)
     .byte $00                    ; old licensee code (Nintendo)

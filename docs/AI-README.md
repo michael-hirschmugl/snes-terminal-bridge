@@ -127,7 +127,7 @@ Header liegt bei LoROM immer bei `$FFC0–$FFDF` (File-Offset `$7FC0–$7FDF` im
 | `$FFC0–$FFD4` | Title | 21 B ASCII, space-padded | „`SNES TERMINAL        `" |
 | `$FFD5` | Map mode | `$20` | LoROM + SlowROM |
 | `$FFD6` | Cartridge type | `$00` | nur ROM, keine Co-Prozessoren |
-| `$FFD7` | ROM size | `$05` | `2^5 KiB = 32 KiB` — muss zur tatsächlichen Image-Größe passen |
+| `$FFD7` | ROM size | `$08` | Everdrive-Mapping: `$08` → „512k" (korrekt); `$05` → „8m" → ROM landet an falscher Adresse (schwarzer Bildschirm). S-CPU ignoriert dieses Byte. |
 | `$FFD8` | RAM size | `$00` | keine Cartridge-RAM (SRAM) |
 | `$FFD9` | Destination | `$02` | Europa / PAL |
 | `$FFDA` | Old licensee | `$00` | OK für Homebrew |
@@ -207,9 +207,15 @@ Wenn sich die ROM-Größe ändert (z. B. zu 64 KiB), müssen `$FFD7` **und** `sn
 ### ROM-Header / Hardware
 
 - **Checksum-Patch nicht überspringen**: `ld65` schreibt Platzhalter (`$0000` / `$FFFF`). Ohne `fix_checksum.py` läuft das ROM zwar im Emulator und auf dem nackten S-CPU, aber Flash-Carts validieren den Header vor dem Mount und weisen es ab. Der Makefile-Target koppelt den Schritt ans Linken — **nicht** entfernen oder nur einzeln `ld65` aufrufen.
-- **ROM-Size-Byte (`$FFD7`) muss zur Image-Größe passen**: Wert `$08` (256 KiB) auf ein 32 KiB-Image ist zwar historisch weit verbreitet, aber strenge Flash-Cart-Firmwares stolpern. Für LoROM 32 KiB ist `$05` korrekt (`2^5 KiB`).
+- **ROM-Size-Byte (`$FFD7`) = `$08`, nicht `$05`**: Das Everdrive verwendet dieses Byte, um die LoROM-Adressierung einzurichten. Mit `$05` (= 32 KiB nach SNES-Spec) klassifiziert das Everdrive das ROM als „8 Mbit" und legt es an die falsche Stelle im Adressraum — schwarzer Bildschirm. Mit `$08` wählt das Everdrive das „512k"-Mapping, das 32-KiB-ROMs korrekt spiegelt. Der S-CPU selbst ignoriert dieses Byte. Faustregel für LoROM-Homebrew auf Everdrive: `$08` verwenden, auch wenn `$05` laut Spec korrekt wäre.
 - **Destination-Code (`$FFD9`) ist real wirksam**: `$02` markiert die ROM als PAL; ein PAL-SNES bootet NTSC-ROMs gar nicht ohne Region-Mod. Umgekehrt zeigen PAL-ROMs auf NTSC-Konsolen oft Bildfehler (falsche VBlank-Länge).
 - **Kein SRAM**: Header-Feld `$FFD8 = $00` und `cartridge type $FFD6 = $00`. Die ROM speichert nichts persistent; `.srm`-Dateien der Emulatoren sind leer/unbenutzt und können bedenkenlos gelöscht werden. Wer SRAM ergänzen will, muss **beide** Felder ändern **und** echte SRAM-Lese-/Schreib-Logik in `main.asm` implementieren.
+- **PPU-Register auf echter Hardware undefiniert**: Emulatoren (bsnes) initialisieren alle PPU-Register auf 0; echte Hardware lässt sie undefiniert. Fehlende `stz`-Initialisierungen können auf echter Hardware einen schwarzen Bildschirm verursachen, der im Emulator nie auftritt. Kritisch für Mode 5 mit `TM=TS=$02` sind insbesondere:
+  - `CGADSUB ($2131)`: Bit 7=1 (Subtraktion) + Bit 1=1 (BG2) → BG2_main − BG2_sub = 0 = schwarz (beide Screens zeigen dasselbe BG2).
+  - `TMW ($212E)`: Bit 1=1 → BG2 auf Main-Screen durch Window maskiert.
+  - `TSW ($212F)`, `CGWSEL ($2130)`, `W12SEL ($2123)`, `W34SEL ($2124)`: ebenfalls auf 0 setzen.
+  
+  Das ROM initialisiert alle diese Register explizit — nie entfernen.
 
 ### Environment / Tooling
 

@@ -175,7 +175,7 @@ The generated ROM is a standard **PAL LoROM** image suitable for running from a 
 - **Title (21 bytes):** `SNES TERMINAL        ` (space-padded)
 - **Map mode:** `0x20` (LoROM, SlowROM)
 - **Cartridge type:** `0x00` (ROM only)
-- **ROM size field:** `0x05` (2^5 KiB = 32 KiB, matches actual image)
+- **ROM size field:** `0x08` — Everdrive compatibility value. The SNES spec says `0x05` for 32 KiB, but Everdrive firmware maps `0x05` as "8 Mbit" and places the ROM at the wrong address (black screen). `0x08` makes Everdrive select its "512k" mapping, which correctly mirrors the 32 KiB image. The S-CPU itself ignores this field.
 - **RAM size field:** `0x00` (no cartridge RAM — the ROM uses only SNES internal WRAM)
 - **Destination code:** `0x02` (Europe / PAL)
 - **Checksum / complement:** patched automatically by `snes/tools/fix_checksum.py` after linking, so flash cartridges accept the ROM.
@@ -383,7 +383,24 @@ In WSLg, `xdotool keyup` (XTest synthetic KeyRelease) does not reliably clear a 
 
 ---
 
-### Scenario 2: Native Linux (X11) + bSNES+
+### Scenario 2: Real PAL SNES hardware + Everdrive flash cart
+
+**Status:** Working (tested 2025-04-23)
+
+**System:**
+- PAL Super Nintendo
+- Everdrive flash cartridge
+
+Flash the ROM and run it directly on the console. No additional setup required — the ROM contains its own display and input logic.
+
+**Hardware notes:**
+- The ROM size byte in the header must be `$08` (not `$05`). Everdrive maps `$05` as "8 Mbit" and loads the ROM at the wrong address; `$08` selects the correct "512k" LoROM mapping.
+- All PPU registers that bsnes initialises to 0 (particularly `CGADSUB`, `CGWSEL`, `TMW`, `TSW`) must be explicitly zeroed in the ROM init sequence. On real hardware they contain undefined values; `CGADSUB` with colour-subtraction bits set for BG2 cancels out the display entirely because both `TM` and `TS` show the same BG2 layer.
+- Mode 5 + interlace (512×448) works on a real PAL SNES without issues.
+
+---
+
+### Scenario 3: Native Linux (X11) + bSNES+
 
 **Status:** Implemented, not yet tested
 
