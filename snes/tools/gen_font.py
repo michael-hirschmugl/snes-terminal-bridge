@@ -2,9 +2,11 @@
 """
 gen_font.py — Generate SNES 4bpp font tiles (8×16 px) for ASCII 0x20–0x7E.
 
-Outputs two files:
-  ../assets/font.inc     — tile data (SNES 4bpp, 2 × 8×8 tiles per character)
-  ../assets/tilemap.inc  — tilemap words (4096 entries, 64×64 tilemap, all blank)
+Outputs four files:
+  ../assets/font.inc          — tile data (SNES 4bpp, 2 × 8×8 tiles per character)
+  ../assets/font2.inc         — tile data (SNES 2bpp, 2 × 8×8 tiles per character)
+  ../assets/tilemap.inc       — tilemap words (4096 entries, 64×64 tilemap, all blank)
+  ../assets/font_preview.png  — contact sheet of all 95 glyphs with 16×16 pixel grid
 
 SNES Mode 5 / 8×16 character cells
 -------------------------------------
@@ -38,6 +40,13 @@ CELL_W     = 8      # character cell width in pixels
 CELL_H     = 16     # character cell height in pixels
 TILEMAP_W  = 64     # SNES BG tilemap width  (entries) — 64×64 for Mode 5
 TILEMAP_H  = 64     # SNES BG tilemap height (entries)
+
+PREVIEW_COLS       = 16                  # characters per row in preview image
+PREVIEW_SCALE      = 2                   # integer upscale factor
+PREVIEW_GRID_PX    = 16                  # grid spacing in *scaled* pixels
+PREVIEW_GRID_COLOR = (220, 50, 50)       # RGB grid line colour (red)
+PREVIEW_BG         = (0, 0, 0)           # background = SNES palette colour 0
+PREVIEW_FG         = (255, 255, 255)     # foreground = SNES palette colour 1
 
 CANDIDATE_FONTS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -132,6 +141,54 @@ def subtile_to_2bpp(rows_8: list[list[int]]) -> bytes:
     return bytes(data)
 
 # ---------------------------------------------------------------------------
+# Preview contact sheet
+# ---------------------------------------------------------------------------
+
+def write_preview(rendered_chars: list[list[list[int]]], out_path) -> None:
+    """
+    Build a contact sheet of every glyph as it will appear on the SNES and
+    overlay a 16×16-pixel grid.
+
+    With PREVIEW_SCALE=2 each 8×8 source tile becomes a 16×16 scaled block, so
+    every grid cell corresponds exactly to one SNES tile. The top/bottom halves
+    of each 8×16 character cell therefore sit in two vertically-stacked grid
+    cells.
+    """
+    from PIL import Image, ImageDraw
+
+    num    = len(rendered_chars)
+    cols   = PREVIEW_COLS
+    rows   = (num + cols - 1) // cols
+    width  = cols * CELL_W
+    height = rows * CELL_H
+
+    img = Image.new("RGB", (width, height), PREVIEW_BG)
+    for idx, char_rows in enumerate(rendered_chars):
+        ox = (idx % cols) * CELL_W
+        oy = (idx // cols) * CELL_H
+        for r, scanline in enumerate(char_rows):
+            for c, v in enumerate(scanline):
+                if v > 128:
+                    img.putpixel((ox + c, oy + r), PREVIEW_FG)
+
+    img = img.resize(
+        (width * PREVIEW_SCALE, height * PREVIEW_SCALE),
+        Image.NEAREST,
+    )
+
+    draw = ImageDraw.Draw(img)
+    w_s, h_s = img.size
+    for x in range(0, w_s + 1, PREVIEW_GRID_PX):
+        draw.line([(x, 0), (x, h_s - 1)], fill=PREVIEW_GRID_COLOR)
+    for y in range(0, h_s + 1, PREVIEW_GRID_PX):
+        draw.line([(0, y), (w_s - 1, y)], fill=PREVIEW_GRID_COLOR)
+
+    img.save(out_path)
+    print(f"font_preview.png: {w_s}×{h_s}px "
+          f"({cols}×{rows} glyphs, scale={PREVIEW_SCALE}×, "
+          f"grid={PREVIEW_GRID_PX}px)")
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -156,6 +213,7 @@ def main() -> None:
     font_path_out    = out_dir / "font.inc"
     font2_path_out   = out_dir / "font2.inc"
     tilemap_path_out = out_dir / "tilemap.inc"
+    preview_path_out = out_dir / "font_preview.png"
 
     # --- Build tile data ---------------------------------------------------
     # 2 tiles per character (top + bottom), tile_top = C*2, tile_bot = C*2+1
@@ -164,9 +222,11 @@ def main() -> None:
     tile_data_2  = [bytes(16)] * total_tiles  # 2bpp tiles for BG2 (odd pixels)
 
     chars = [chr(c) for c in range(0x20, 0x7F)]   # 95 printable ASCII chars
+    rendered_chars: list[list[list[int]]] = []
 
     for C, char in enumerate(chars):
         rows      = render_char(char, font)
+        rendered_chars.append(rows)
         top_rows  = rows[:8]   # upper half → tile_top
         bot_rows  = rows[8:]   # lower half → tile_bot
 
@@ -211,6 +271,9 @@ def main() -> None:
             col_comment = f"; ({i % TILEMAP_W}, {i // TILEMAP_W})"
             f.write(f"    .word ${entry:04X}  {col_comment}\n")
     print(f"tilemap.inc: {len(tilemap)} entries ({len(tilemap) * 2} bytes)")
+
+    # --- Build preview PNG (contact sheet with 16×16-pixel grid) ------------
+    write_preview(rendered_chars, preview_path_out)
 
 
 if __name__ == "__main__":
