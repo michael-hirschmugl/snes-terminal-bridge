@@ -727,13 +727,13 @@ keymap_data:
     .byte "SNES TERMINAL        "
     .byte $20                    ; map mode: LoROM, SlowROM
     .byte $00                    ; cartridge type: ROM only
-    .byte $08                    ; ROM size exponent: 32 KiB image
-    .byte $00                    ; SRAM size: none
+    .byte $05                    ; ROM size: 2^5 KiB = 32 KiB (actual image size)
+    .byte $00                    ; RAM size: 0 (no cartridge RAM)
     .byte $02                    ; destination code: Europe (PAL)
     .byte $00                    ; old licensee code (Nintendo)
     .byte $00                    ; version
-    .word $FFFF                  ; checksum complement (placeholder)
-    .word $0000                  ; checksum (placeholder)
+    .word $FFFF                  ; checksum complement (patched post-link by fix_checksum.py)
+    .word $0000                  ; checksum (patched post-link by fix_checksum.py)
 
 ; -----------------------------------------------------------------------------
 ; Interrupt vectors  ($FFE4–$FFFF)

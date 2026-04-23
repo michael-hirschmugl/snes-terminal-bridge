@@ -160,18 +160,10 @@ The generated ROM is configured as a standard **PAL LoROM** image and is suitabl
 - **Title (21 bytes):** `SNES TERMINAL`
 - **Map mode:** `0x20` (LoROM, SlowROM)
 - **Cartridge type:** `0x00` (ROM only)
-- **ROM size field:** `0x08` (32 KiB)
-- **SRAM size field:** `0x00` (no cartridge SRAM declared)
+- **ROM size field:** `0x05` (2^5 KiB = 32 KiB, matches actual image)
+- **RAM size field:** `0x00` (no cartridge RAM — the ROM uses only SNES internal WRAM)
 - **Destination code:** `0x02` (Europe / PAL)
-
-If `SRAM size` remains `0x00`, the ROM does not use save RAM yet.
-
-About `.srm` files in emulators:
-- `.srm` represents cartridge save RAM (SRAM), not SNES internal WRAM.
-- Deleting `.srm` only removes stored save content.
-- Whether bsnes reports a RAM board depends on ROM metadata/heuristics, not on the presence of `.srm` alone.
-
-If you later add SRAM support, update the SRAM size field and implement explicit SRAM read/write logic in `snes/src/main.asm`.
+- **Checksum / complement:** patched automatically by `snes/tools/fix_checksum.py` after linking, so flash cartridges accept the ROM.
 
 Before flashing to real hardware:
 - Rebuild from a clean state: `cd snes && make clean && make`

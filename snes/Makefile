@@ -26,8 +26,9 @@ TOOLS_PYTHON := $(TOOLS_VENV)/bin/python
 all: $(ROM)
 
 # ---- Link ----
-$(ROM): $(OBJ) snes.cfg | build
+$(ROM): $(OBJ) snes.cfg tools/fix_checksum.py | build
 	ld65 -C snes.cfg -o $@ $(OBJ)
+	python3 tools/fix_checksum.py $@
 	@echo "ROM: $@ ($$(wc -c < $@) bytes)"
 
 # ---- Assemble ----
