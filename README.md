@@ -67,21 +67,18 @@ scripts/
 └── test_mapping.py  # Interactive mapping test (no emulator needed)
 
 snes/
-├── Makefile              # Build: `make` → Mode 1 ROM, `make mode5` → Mode 5 ROM, `make both` → both
+├── Makefile              # Build: `make` → build/terminal.sfc
 ├── snes.cfg              # ld65 linker config (LoROM memory map)
 ├── src/
-│   ├── main.asm          # Mode 1 ROM — 4bpp BG1, 8×16 chars, 32×14 scroll grid
-│   └── main_mode5.asm    # Mode 5 ROM — 2bpp BG2, 16×16 chars, 32×26 scroll grid, interlaced 512×448
+│   └── main.asm          # SNES Mode 5 ROM — BG2 2bpp, 16×16 chars, 32×26 scroll grid, interlaced 512×448
 ├── assets/               # Generated files (not committed)
-│   ├── font.inc          # Mode 1: 4bpp 8×16 tile data (gen_font.py, DejaVu Sans Mono)
-│   ├── tilemap.inc       # Mode 1: BG1 64×64 blank tilemap (gen_font.py)
-│   ├── keymap.inc        # Mode 1: Button bitmask → tile number (C*2), gen_keymap.py
-│   ├── font2.inc         # Mode 5: 2bpp 16×16 dense-packed tile data (gen_font2.py, JetBrains Mono)
-│   └── keymap_mode5.inc  # Mode 5: Button bitmask → VRAM base slot N(C), gen_keymap.py
+│   ├── font.inc          # 2bpp 16×16 dense-packed tile data (gen_font.py, JetBrains Mono)
+│   ├── keymap.inc        # Button bitmask → VRAM base slot N(C) lookup (gen_keymap.py)
+│   └── font_preview.png  # Contact sheet of all glyphs (debug artefact)
 └── tools/
-    ├── gen_font.py        # Renders TTF font → SNES 4bpp tiles + blank tilemap (Mode 1)
-    ├── gen_font2.py       # Renders TTF font → 2bpp 16×16 dense-packed VRAM block (Mode 5)
-    ├── gen_keymap.py      # Reads mappings.yaml → both keymap.inc and keymap_mode5.inc
+    ├── gen_font.py        # Renders TTF font → 2bpp 16×16 dense-packed VRAM block
+    ├── gen_keymap.py      # Reads mappings.yaml → keymap.inc
+    ├── fix_checksum.py    # Post-link SNES-header checksum patcher
     └── requirements.txt   # Pillow, PyYAML
 
 docs/
@@ -93,18 +90,17 @@ docs/
 
 ## SNES ROM
 
-The `snes/` subdirectory contains the SNES-side application that runs inside the emulator. **Two parallel ROM builds** are available, sharing the same input/keymap logic but using different SNES graphics modes:
+The `snes/` subdirectory contains the SNES-side application that runs inside the emulator. The ROM is a 32 KiB LoROM image built with the cc65 toolchain (`ca65` + `ld65`).
 
-| Build | Makefile target | Output | Graphics mode | Grid | Character cell |
-|---|---|---|---|---|---|
-| **Mode 1** (original, default) | `make` | `build/terminal.sfc` | Mode 1, BG1, 4bpp, 8×8 tiles | 32×14 visible, 32-row scroll buffer | 8×16 px (two 8×8 tiles stacked) |
-| **Mode 5** (new, hi-res) | `make mode5` | `build/terminal_mode5.sfc` | Mode 5 + interlace, BG2, 2bpp, 16×16 tiles | 32×26 visible, 32-row scroll buffer | 16×16 px (PPU assembles from four 8×8 tiles) |
+| Output | Graphics mode | Grid | Character cell |
+|---|---|---|---|
+| `build/terminal.sfc` | SNES Mode 5 + interlace, BG2, 2bpp, 16×16 tiles | 32×26 visible, 32-row scroll buffer | 16×16 px (PPU assembles from four 8×8 tiles) |
 
-Both ROMs are 32 KiB LoROM, both use identical input handling (debounce, boot guard, dedupe, keymap scan). They differ only in display resolution, font rendering, and VRAM tile layout. The Mode 5 path uses higher effective resolution (512×448 interlaced) for crisper anti-aliased text; the Mode 1 path remains the default for compatibility and broader emulator support. See [`docs/AI-MODE-5-README.md`](docs/AI-MODE-5-README.md) for the Mode 5 graphics details.
+Effective resolution is 512×448 (interlaced) for crisp anti-aliased text rendered from JetBrains Mono. See [`docs/AI-MODE-5-README.md`](docs/AI-MODE-5-README.md) for the Mode 5 graphics details.
 
-### Current state: scrolling multi-row terminal ✅
+### Current state: scrolling multi-row terminal
 
-Each ROM receives joypad combos from the bridge, looks up the corresponding ASCII character, and displays it in a scrolling terminal grid. Characters appear left-to-right, row by row, with Enter advancing to a new line and the viewport scrolling automatically once the visible rows are filled (14 in Mode 1, 26 in Mode 5). Backspace erases the last character.
+The ROM receives joypad combos from the bridge, looks up the corresponding ASCII character, and displays it in a scrolling terminal grid. Characters appear left-to-right, row by row, with Enter advancing to a new line and the viewport scrolling automatically once the visible 26 rows are filled. Backspace erases the last character.
 
 **Screen at startup:** Intentionally blank — characters appear as you type.
 
@@ -112,7 +108,7 @@ Each ROM receives joypad combos from the bridge, looks up the corresponding ASCI
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
 - ROM debounces: bitmask must be stable for ≥ 2 consecutive VBlanks (~33 ms) before triggering
 - Same combo is not re-triggered until all buttons are released (no key repeat while held)
-- On match, two tiles (top + bottom half of the character) are written to VRAM at the next VBlank
+- On match, a single 16-bit tilemap word is written to VRAM at the next VBlank; the PPU auto-reads the four 8×8 sub-tiles that make up the 16×16 glyph
 - Cursor advances left-to-right, auto-wraps at column 32
 
 **Special actions** (non-printable):
@@ -122,7 +118,7 @@ Each ROM receives joypad combos from the bridge, looks up the corresponding ASCI
 | `KEY_DELETE` | Down + Right + X + Select | Erase last character, move cursor left |
 | `KEY_ENTER`  | Up + Left + A + B          | Advance to next row, scroll if needed |
 
-`gen_keymap.py` generates `assets/keymap.inc` — a lookup table mapping each joypad bitmask to a font tile number (regular characters) or to sentinel value `$FFFF`/`$FFFE` (special actions), compiled from `config/mappings.yaml`.
+`gen_keymap.py` generates `assets/keymap.inc` — a lookup table mapping each joypad bitmask to a font tile slot (regular characters) or to sentinel value `$FFFF` / `$FFFE` (special actions), compiled from `config/mappings.yaml`.
 
 ### Boot guard (`boot_ready`)
 
@@ -132,21 +128,7 @@ The `boot_ready` flag is set the first time the joypad reads all-zero (stable fo
 
 **Important for WSLg (see Startup Procedure below):** On WSLg/XWayland, synthetic `xdotool keyup` events may not reliably clear a physically-stuck key from `XQueryKeymap`. The bridge's `_release_all()` on startup attempts this, but the reliable workaround is to briefly type directly inside bSNES+ once after loading the ROM (see below).
 
-### How the display works — Mode 1 (default ROM)
-
-- **BG mode:** SNES Mode 1, BG1 only, 8×8 tiles, 4bpp
-- **Palette:** colour 0 = black ($0000), colour 1 = white ($7FFF)
-- **Character cell:** 8px wide × 16px tall (two stacked 8×8 tiles: top half + bottom half)
-- **Grid:** 32 columns × 14 visible rows; 32-row circular buffer with BG1VOFS scroll
-- **VRAM layout:**
-  - `$0000–$1FFF` — BG1 tilemap (64×64 entries × 2 bytes = 8 KB)
-  - `$2000–$37BF` — Font tiles (190 tiles × 32 bytes = 6080 bytes)
-- **Tile numbering:** for ASCII char `c`: `C = ord(c) - 0x20`, `tile_top = C*2`, `tile_bot = C*2+1`
-- **Font generation:** `tools/gen_font.py` uses Pillow to render DejaVu Sans Mono (size 13) into 8×16 cells, splits into top/bottom 8×8 halves, converts to SNES 4bpp format
-- **Data transfer:** Two DMA transfers on reset — tilemap (all blank) to VRAM `$0000`, font tiles to VRAM `$2000`
-- **Circular scroll:** `cursor_y` (0–31) tracks the write row; `top_vram_row` tracks the topmost visible row; `BG1VOFS = top_vram_row × 16` pixels
-
-### How the display works — Mode 5 (hi-res ROM)
+### How the display works
 
 - **BG mode:** SNES Mode 5 + interlace, BG2 only, 16×16 tiles (PPU assembles them from four 8×8 VRAM tiles per map entry), 2bpp
 - **Resolution:** 512×448 effective (interlaced), enabled via `SETINI = $01`; BG2 rendered on both main and sub screen (`TM = TS = $02`) as required by hi-res
@@ -156,8 +138,8 @@ The `boot_ready` flag is set the first time the joypad reads all-zero (stable fo
 - **VRAM layout:**
   - `$0000–$17FF` — Font tiles, 6144 bytes, dense-packed (384 × 8×8 slots)
   - `$1000–$17FF` — BG2 tilemap (32×32 entries × 2 bytes = 2 KB), configured via `BG2SC = $10`
-- **Tile numbering:** for ASCII char `c`: `C = ord(c) - 0x20`, `tile = (C // 8) * 32 + (C % 8) * 2` (base VRAM slot of the top-left 8×8 sub-tile). The keymap lookup table (`keymap_mode5.inc`) stores this value directly, so the ASM hot path writes a single 16-bit tilemap word per character.
-- **Font generation:** `tools/gen_font2.py` renders JetBrains Mono Regular into 16×16 cells with Freetype anti-aliasing, splits each glyph into four 8×8 sub-tiles, encodes them 2bpp, and places them at VRAM addresses following the `N, N+1, N+16, N+17` pattern so the PPU reads them natively for 16×16 BG tiles. See [`docs/AI-MODE-5-README.md`](docs/AI-MODE-5-README.md) for the dense-pack rationale.
+- **Tile numbering:** for ASCII char `c`: `C = ord(c) - 0x20`, `tile = (C // 8) * 32 + (C % 8) * 2` (base VRAM slot of the top-left 8×8 sub-tile). The keymap lookup table (`keymap.inc`) stores this value directly, so the ASM hot path writes a single 16-bit tilemap word per character.
+- **Font generation:** `tools/gen_font.py` renders JetBrains Mono Regular into 16×16 cells with FreeType anti-aliasing, splits each glyph into four 8×8 sub-tiles, encodes them 2bpp, and places them at VRAM addresses following the `N, N+1, N+16, N+17` pattern so the PPU reads them natively for 16×16 BG tiles. See [`docs/AI-MODE-5-README.md`](docs/AI-MODE-5-README.md) for the dense-pack rationale.
 - **Data transfer:** DMA transfers on reset — palette (16 bytes) to CGRAM, font tiles (6144 bytes) to VRAM `$0000`, full VRAM/CGRAM clear beforehand. Tilemap starts at `$1000` and is zero after the VRAM clear — tilemap slot 0 points to the space glyph (all zero pixels), so blank cells render correctly without any fill routine.
 - **Circular scroll:** `cursor_y` (0–31) tracks the write row; `top_vram_row` tracks the topmost visible row; `BG2VOFS = top_vram_row × 16` pixels. New rows are cleared with a single 32-word zero-fill (no section-boundary wrap since the tilemap is one 32×32 screen page).
 
@@ -178,34 +160,31 @@ Prerequisites: `sudo apt install cc65` (provides `ca65` + `ld65`)
 
 ```bash
 cd snes
-make            # Mode 1 ROM → build/terminal.sfc (default, 32768 bytes)
-make mode5      # Mode 5 ROM → build/terminal_mode5.sfc (32768 bytes)
-make both       # builds both ROMs, regenerates all assets once
-make font       # regenerate only assets/*.inc + preview PNGs
-make run        # build Mode 1 ROM and open it in bsnes
-make run-mode5  # build Mode 5 ROM and open it in bsnes
+make            # build ROM → build/terminal.sfc (32768 bytes)
+make font       # regenerate assets/*.inc + font preview PNG only
+make run        # build ROM and open it in bsnes
 make clean      # remove build/ and generated assets
 ```
 
-Both output ROMs are LoROM SNES images, exactly 32768 bytes each. They can be loaded side-by-side; the bridge does not need to know which ROM you run — the keymap bitmasks are identical, only the tile encoding differs.
+The output ROM is a LoROM SNES image, exactly 32768 bytes.
 
 ### ROM header and hardware notes
 
-Both generated ROMs are standard **PAL LoROM** images suitable for running from a flash cartridge. They share the same header fields (map mode, cartridge type, ROM size, RAM size, destination), with only the title differing.
+The generated ROM is a standard **PAL LoROM** image suitable for running from a flash cartridge.
 
-- **Title (21 bytes):** `SNES TERMINAL` (Mode 1) or `SNES TERMINAL MODE 5` (Mode 5)
+- **Title (21 bytes):** `SNES TERMINAL        ` (space-padded)
 - **Map mode:** `0x20` (LoROM, SlowROM)
 - **Cartridge type:** `0x00` (ROM only)
 - **ROM size field:** `0x05` (2^5 KiB = 32 KiB, matches actual image)
 - **RAM size field:** `0x00` (no cartridge RAM — the ROM uses only SNES internal WRAM)
 - **Destination code:** `0x02` (Europe / PAL)
-- **Checksum / complement:** patched automatically by `snes/tools/fix_checksum.py` after linking, so flash cartridges accept the ROM. Runs for both ROMs independently.
+- **Checksum / complement:** patched automatically by `snes/tools/fix_checksum.py` after linking, so flash cartridges accept the ROM.
 
 Before flashing to real hardware:
-- Rebuild from a clean state: `cd snes && make clean && make both`
-- Verify ROM size is exactly 32768 bytes (`build/terminal.sfc`, `build/terminal_mode5.sfc`)
+- Rebuild from a clean state: `cd snes && make clean && make`
+- Verify ROM size is exactly 32768 bytes (`build/terminal.sfc`)
 - Use a PAL console profile on your flash cartridge / setup
-- Test first in bsnes: ROMs should be detected as `LOROM` and region `PAL`
+- Test first in bsnes: ROM should be detected as `LOROM` and region `PAL`
 - **Mode 5 requires hardware or an emulator that implements interlace correctly.** bsnes-plus works; some older emulators downsample or show only 224 lines.
 
 ---
@@ -269,9 +248,7 @@ Key names follow xdotool / X11 syntax (`Return`, `space`, `Up`, `numbersign`, et
 
 ```bash
 # 1. Start bSNES+ and load the terminal ROM
-bsnes snes/build/terminal.sfc           # Mode 1 (default, 8×16 chars)
-# or
-bsnes snes/build/terminal_mode5.sfc     # Mode 5 (hi-res, 16×16 anti-aliased chars)
+bsnes snes/build/terminal.sfc
 
 # 2. Unlock the ROM's boot guard (WSLg only — see note below)
 #    Press and immediately release any key directly inside the bSNES+ window.
@@ -282,8 +259,6 @@ python -m snes_terminal_bridge
 # Optional: override the emulator window title pattern
 python -m snes_terminal_bridge --target bsnes
 ```
-
-The bridge is ROM-agnostic — it sends the same button combinations to both ROMs. Pick whichever ROM you want in bSNES+ and start typing.
 
 Press **Ctrl+C** to quit.
 
@@ -328,6 +303,7 @@ Special key names (`KEY_*`) are handled by the ROM directly and do not produce a
 | Key name | ROM action |
 |---|---|
 | `KEY_DELETE` | Move cursor left, erase last character (writes space tile) |
+| `KEY_ENTER`  | Advance to next row, scroll if needed |
 
 ### config/keyboard_mappings.yaml
 
@@ -358,7 +334,7 @@ Opens an interactive prompt to test character → button mappings without a runn
 
 ### Scenario 1: WSL2 + WSLg + bSNES+ on Windows 11
 
-**Status:** Working ✅
+**Status:** Working
 
 **System:**
 - Windows 11 with WSL2 (Ubuntu 24.04), WSLg enabled

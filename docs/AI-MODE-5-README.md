@@ -3,18 +3,18 @@
 > **Origin note.** This document was ported verbatim from the sibling
 > project [`snes-tile-test`](https://example.invalid/) — it is the
 > authoritative Mode 5 / hi-res / dense-pack reference that
-> `snes-terminal-bridge` relies on for its Mode 5 build path
-> (`snes/src/main_mode5.asm`, `snes/tools/gen_font2.py`, the
-> `keymap_mode5.inc` branch of `snes/tools/gen_keymap.py`). The
-> hardware/PPU facts and layout rules described below apply unchanged.
+> `snes-terminal-bridge` relies on for its SNES build path
+> (`snes/src/main.asm`, `snes/tools/gen_font.py`, the keymap emitted
+> by `snes/tools/gen_keymap.py`). The hardware/PPU facts and layout
+> rules described below apply unchanged.
 >
 > Paths mentioned in the text refer to the original `snes-tile-test`
 > layout and are kept for traceability. Mapping to files in this repo:
 >
 > | Reference in this document | File in this repo |
 > |---|---|
-> | `tools/gen_assets.py` (font / image → dense-pack) | `snes/tools/gen_font2.py` |
-> | `main_mode5_2bpp.s` (Mode 5 boot + BG2 setup) | `snes/src/main_mode5.asm` |
+> | `tools/gen_assets.py` (font / image → dense-pack) | `snes/tools/gen_font.py` |
+> | `main_mode5_2bpp.s` (Mode 5 boot + BG2 setup) | `snes/src/main.asm` |
 > | `src/palette.s`, image/splash targets | not ported — this repo only uses the 2bpp font path |
 >
 > See [`AI-README.md`](AI-README.md) §2 / §4 for how those references

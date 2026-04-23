@@ -18,10 +18,6 @@ build/
 # SNES build outputs
 snes/build/
 snes/assets/font.inc
-snes/assets/font2.inc
-snes/assets/tilemap.inc
 snes/assets/keymap.inc
-snes/assets/keymap_mode5.inc
 snes/assets/font_preview.png
-snes/assets/font2_preview.png
 snes/tools/.venv/
