@@ -15,6 +15,7 @@ ROM     := build/terminal.sfc
 OBJ     := build/main.o
 ASM_SRC := src/main.asm
 FONT    := assets/font.inc
+FONT2   := assets/font2.inc
 TILEMAP := assets/tilemap.inc
 KEYMAP  := assets/keymap.inc
 
@@ -36,10 +37,13 @@ $(OBJ): $(ASM_SRC) $(FONT) $(TILEMAP) $(KEYMAP) | build
 	ca65 --cpu 65816 -o $@ $<
 
 # ---- Font + tilemap + keymap generation ----
-font: $(FONT) $(TILEMAP) $(KEYMAP)
+font: $(FONT) $(FONT2) $(TILEMAP) $(KEYMAP)
 
 $(FONT) $(TILEMAP): tools/gen_font.py | $(TOOLS_VENV)
 	$(TOOLS_PYTHON) tools/gen_font.py
+
+$(FONT2): tools/gen_font2.py tools/fonts/JetBrainsMono-Regular.ttf | $(TOOLS_VENV)
+	$(TOOLS_PYTHON) tools/gen_font2.py
 
 $(KEYMAP): tools/gen_keymap.py | $(TOOLS_VENV)
 	$(TOOLS_PYTHON) tools/gen_keymap.py
