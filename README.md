@@ -154,6 +154,18 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 - byte 0 (low) = JOY1L bits, compared with $4218 snapshot
 - byte 1 (high) = JOY1H bits, compared with $4219 snapshot
 
+### Planned features
+
+| Feature | Notes |
+|---|---|
+| **8×16 character cells** | Switch from 16×16 to 8×16 px per glyph (two 8×8 tiles stacked). Most glyphs fit in 8 px width, so the grid would widen from 32 to 64 columns. Requires updated `gen_font.py`, `gen_keymap.py` (two tile addresses per char), and `main.asm`. |
+| **Fix top-of-screen clipping** | Topmost text rows are cut off by TV overscan. Plan: add a top-margin scroll offset or reduce the visible row count. |
+| **Background image (4bpp)** | Static or animated backdrop on a separate BG layer (BG1 or BG3) behind the 2bpp text layer, with its own 4bpp palette. |
+| **Cursor** | Blinking or static cursor glyph at the current input position. |
+| **Welcome message** | Short boot splash (project name / version) displayed immediately after ROM init. |
+| **Line input buffer** | Buffer typed characters locally so Backspace and cursor keys work in-line before the line is submitted with Enter. |
+| **Terminal prompt** | Prompt string (e.g. `> `) prepended to each new input line. |
+
 ### Building the ROM
 
 Prerequisites: `sudo apt install cc65` (provides `ca65` + `ld65`)
