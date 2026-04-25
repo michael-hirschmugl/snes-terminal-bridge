@@ -91,11 +91,11 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
 - **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden.
 - **32-row circular buffer + `BG2VOFS = top_vram_row * 16`**: Tilemap ist 32×32 (eine Screen-Page reicht, weil 16×16-Tiles 32×26 = fast volle Höhe abdecken), sichtbar sind 32×26. Scrollen: `cursor_y` erhöhen (mod 32), `top_vram_row` nachziehen, neue Zeile in VRAM clearen (**1 Section**, 32 Word-Writes — kein Boundary-Wrap).
-- **Tilemap-Einträge sind VRAM-Slot-Indizes, nicht Char-Indizes**: Das Low-Byte des Tilemap-Worts ist `N(C) = (C//8)*32 + (C%8)*2`, nicht `C`. Das High-Byte trägt Flip/Palette/Priority (aktuell 0). `gen_keymap.py` liefert das fertig kodierte 16-Bit-Wort in `keymap.inc`, der ASM-Code stellt nur `pending_tile_{lo,hi}` aus der Lookup-Tabelle in VRAM — **keine** CPU-seitige Umrechnung.
+- **Tilemap-Einträge sind VRAM-Slot-Indizes, nicht Char-Indizes**: Das Low-Byte des Tilemap-Worts ist `N(C) = (C//8)*32 + (C%8)*2`, nicht `C`. Das High-Byte trägt Flip/Palette/Priority; für Textzeichen $3C oder $3D (Priority=1, Sub-Palette=7) — vorcodiert in `gen_keymap.py`, **kein** CPU-seitiges OR im Hot-Path. `gen_keymap.py` liefert das fertig kodierte 16-Bit-Wort in `keymap.inc`, der ASM-Code stellt nur `pending_tile_{lo,hi}` aus der Lookup-Tabelle in VRAM — **keine** CPU-seitige Umrechnung.
 - **Space rendert aus Tile-Slot 0**: Die Zero-Clear-DMA beim Reset setzt die gesamte Tilemap (Bereich `$1000..$17FF`) auf `$0000`. Tilemap-Index 0 zeigt auf die vier Sub-Tiles der Space-Glyphe (alle Bytes 0, weil `gen_font.py` Space so kodiert). Deshalb ist **kein** dedizierter Blank-Index-Fill nötig; das ROM verlässt sich auf diese Invariante. Wer in `gen_font.py` Space nicht-leer macht, zerstört den Boot-Bildschirm.
 - **Debounce + Dedupe doppelt**: `stable_cnt ≥ 2` verhindert Frame-Rauschen, `last_trig_{lo,hi}` verhindert Auto-Repeat beim Gehalten-Halten derselben Kombo. Beide sind nötig.
 - **Boot-Guard (`boot_ready`)**: ROM verwirft jegliche Eingabe, bis einmal alle Buttons = 0 war. Schutz gegen „hängenden Key aus Vorsession".
-- **`TM = TS = $02`**: BG2 muss auf **Main- und Sub-Screen** gleichzeitig aktiv sein. Hi-Res teilt gerade/ungerade Pixelspalten zwischen beiden Screens auf; fehlt einer, sieht man nur jede zweite Spalte. Dasselbe gilt für das Interlace-Bit (`SETINI = $01`) — ohne bleibt die Auflösung bei 224 Zeilen, Glyphen wirken doppelt so hoch gestaucht.
+- **`TM = TS = $03`**: Beide BG-Layer (BG1 Wallpaper + BG2 Text) müssen auf **Main- und Sub-Screen** gleichzeitig aktiv sein. Hi-Res teilt gerade/ungerade Pixelspalten zwischen beiden Screens auf; fehlt einer, sieht man nur jede zweite Spalte. Dasselbe gilt für das Interlace-Bit (`SETINI = $01`) — ohne bleibt die Auflösung bei 224 Zeilen, Glyphen wirken doppelt so hoch gestaucht.
 - **A/X Register-Breitenwechsel explizit kommentieren** (`.a8` / `.a16`, `.i8` / `.i16`). Jeder `rep`/`sep` muss paarig sein, inkl. Sprünge aus dem breiten Bereich heraus.
 
 ### Build / Code-Gen
@@ -105,7 +105,7 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
   Make-Targets:
   | Target | Output | Zweck |
   |---|---|---|
-  | `make` / `make all` | `build/terminal.sfc` | Das Mode-5-ROM (32 KiB LoROM, PAL) |
+  | `make` / `make all` | `build/terminal.sfc` | Das Mode-5-ROM (64 KiB 2-Bank-LoROM, PAL) |
   | `make font` | alle `*.inc` + `font_preview.png` | Nur Asset-Regeneration |
   | `make run` | startet ROM in bsnes | |
   | `make clean` | löscht `build/` + `assets/*.inc` | |
@@ -114,8 +114,13 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 - **`gen_font.py` erzeugt zwei Artefakte** (JetBrains Mono Regular, `tools/fonts/JetBrainsMono-Regular.ttf`, 16×16-Zellen, 2bpp anti-aliased):
   - `font.inc` — 2bpp Font-Tiles in **Dense-Pack-VRAM-Order**. Pro Zeichen vier 8×8-Sub-Tiles (TL/TR/BL/BR) an VRAM-Slots `N, N+1, N+16, N+17` mit `N(C) = (C//8)*32 + (C%8)*2`. Das Script schreibt einen flachen 6144-Byte-`.byte`-Dump der gesamten VRAM-Region (384 Slots × 16 Bytes), kein Char-basiertes Layout. **Diese Reihenfolge ist Pflicht** — die PPU liest 16×16-BG-Tiles immer nach dem `N, N+1, N+16, N+17`-Muster, und das Keymap liefert genau diesen `N`-Wert. Details siehe [`AI-MODE-5-README.md`](AI-MODE-5-README.md).
   - `font_preview.png` — Kontaktbogen aller 95 Glyphen mit 8-SNES-Pixel-Raster. Reines Debug-Artefakt, nicht Teil des Builds.
+- **`gen_assets.py`** (aus snes-tile-test übernommen) erzeugt die BG1-Wallpaper-Daten via `mode5_image`-Pipeline aus `assets/linux_wallpaper_512x448_right_4bpp.png`:
+  - `build/mode5_wallpaper_4bpp/palette.bin` — 32 Bytes (16 BGR555-Farben, BG1 Sub-Palette 0)
+  - `build/mode5_wallpaper_4bpp/tiles.4bpp.chr` — 4bpp-Tiles (dense-packed)
+  - `build/mode5_wallpaper_4bpp/tilemap.bin` — 32×32 Tilemap (2048 Bytes)
+  - `crop_image.py` ist ein Hilfsmodul für Skalierung/Crop, das von `gen_assets.py` importiert wird.
 - **`gen_keymap.py` erzeugt ein Artefakt** aus `mappings.yaml`:
-  - `keymap.inc` — Tile-Feld `N(C) = (C//8)*32 + (C%8)*2` (Dense-Pack-VRAM-Base-Slot). Enthält pro Mapping-Eintrag `.word bitmask, .word tile`, mit `SPECIAL_ACTIONS`-Sentinels (`$FFFF`=DELETE, `$FFFE`=ENTER) und Terminator-Word `$0000,$0000`.
+  - `keymap.inc` — Tilemap-Wort `N(C) = (C//8)*32 + (C%8)*2 | $3C00` (Dense-Pack-VRAM-Slot + Priority=1 + Sub-Palette=7). Enthält pro Mapping-Eintrag `.word bitmask, .word tile_word`, mit `SPECIAL_ACTIONS`-Sentinels (`$FFFF`=DELETE, `$FFFE`=ENTER) und Terminator-Word `$0000,$0000`.
 - **Post-Link-Checksum-Patch**: nach `ld65` läuft zwingend `python3 tools/fix_checksum.py <rom>`. Der Linker kann die Checksumme nicht berechnen, weil sie sich selbst enthält — das Script setzt erst `complement=$FFFF`, `checksum=$0000`, summiert alle Bytes (mod `$10000`), schreibt `checksum` an `$FFDE/$FFDF` und `complement = checksum XOR $FFFF` an `$FFDC/$FFDD`. Ohne den Patch lehnen Flash-Cartridges das ROM ab. Der Makefile koppelt den Schritt ans Linken — **nicht** entfernen oder nur einzeln `ld65` aufrufen.
 
 ### SNES-Header (Pflichtfelder, `main.asm` → Segment `HEADER`)
@@ -124,7 +129,7 @@ Header liegt bei LoROM immer bei `$FFC0–$FFDF` (File-Offset `$7FC0–$7FDF` im
 
 | Offset | Feld | Wert | Bedeutung |
 |---|---|---|---|
-| `$FFC0–$FFD4` | Title | 21 B ASCII, space-padded | „`SNES TERMINAL        `" |
+| `$FFC0–$FFD4` | Title | 21 B ASCII, space-padded | „`SNES TERMINAL+WALL   `" |
 | `$FFD5` | Map mode | `$20` | LoROM + SlowROM |
 | `$FFD6` | Cartridge type | `$00` | nur ROM, keine Co-Prozessoren |
 | `$FFD7` | ROM size | `$08` | Everdrive-Mapping: `$08` → „512k" (korrekt); `$05` → „8m" → ROM landet an falscher Adresse (schwarzer Bildschirm). S-CPU ignoriert dieses Byte. |
@@ -199,9 +204,9 @@ Wenn sich die ROM-Größe ändert (z. B. zu 64 KiB), müssen `$FFD7` **und** `sn
 - **Neue Special-Action vergessen in `gen_keymap.py:SPECIAL_ACTIONS` einzutragen** → wird in `@normal_tile` als gültiger Tile-Index behandelt und schreibt Schrott in VRAM. Sentinels leben im Bereich `$FF00–$FFFF` (High-Byte = `$FF`); neue Aktionen dort anhängen + in `main.asm` den `@normal_tile`-Switch ergänzen.
 - **Keymap-Reihenfolge irrelevant, aber Sentinel `$0000,$0000` muss existieren** — `@scan_loop` stoppt sonst nie. `gen_keymap.py` schreibt ihn automatisch ans Ende.
 - **`cursor_y` ist (mod 32)**. Viewport sind 26 Zeilen (`VISIBLE_ROWS` im Header), 32 ist der zirkuläre Puffer. Wer das mit der Viewport-Höhe verwechselt, berechnet `BG2VOFS` falsch.
-- **Tile-Bytes in der Pending-Queue sind schon das komplette 16-Bit-Wort**: `pending_tile_lo` = `N(C)` (low byte), `pending_tile_hi` = attribute byte (aktuell 0). Kein `* 2`, kein `+ 1`, kein `OR` mit Palette-Bits im ASM. Alles was im Tilemap landen soll, muss vorher in `gen_keymap.py` kodiert werden. Dadurch bleibt der Hot-Path VRAM-Write ein einziger 16-Bit-Store.
-- **BG2SC/BG12NBA falsch** → black screen oder gescrambelte Tiles. Kanonische Werte: `BGMODE=$25` (Mode 5 + BG2 16×16), `BG2SC=$10` (Tilemap @ Word `$1000`, 32×32), `BG12NBA=$00` (beide Char-Bases bei 0). Wenn das Char-Base von BG2 verschoben wird, muss `FONT_BYTES` und die Tile-Upload-Adresse in `main.asm` mit.
-- **`TM`/`TS` dürfen BG2 nicht nur auf einem Screen haben**: Hi-Res verlangt BG2 auf Main **und** Sub. `TM=TS=$02`. Wer nur `TM=$02` setzt, sieht jede zweite Pixelspalte schwarz.
+- **Tile-Bytes in der Pending-Queue sind schon das komplette 16-Bit-Wort**: `pending_tile_lo` = low byte von `N(C) | $3C00`, `pending_tile_hi` = high byte ($3C/$3D für Textzeichen, $FF für Sentinels). Kein `* 2`, kein `+ 1`, kein `OR` mit Palette-Bits im ASM. Alles was im Tilemap landen soll, muss vorher in `gen_keymap.py` kodiert werden. Dadurch bleibt der Hot-Path VRAM-Write ein einziger 16-Bit-Store.
+- **BG-Register falsch gesetzt** → black screen oder gescrambelte Tiles. Kanonische Werte: `BGMODE=$35` (Mode 5 + BG1 16×16 + BG2 16×16), `BG1SC=$50` (BG1 Tilemap @ Word `$5000`, 32×32), `BG2SC=$10` (BG2 Tilemap @ Word `$1000`, 32×32), `BG12NBA=$02` (BG2 Char-Base @ Word `$0000`, BG1 Char-Base @ Word `$2000`). Wenn das Char-Base von BG2 verschoben wird, muss `FONT_BYTES` und die Tile-Upload-Adresse in `main.asm` mit.
+- **`TM`/`TS` dürfen BG-Layer nicht nur auf einem Screen haben**: Hi-Res verlangt jeden aktiven Layer auf Main **und** Sub. `TM=TS=$03` (BG1+BG2). Wer nur `TM=$03` setzt, sieht jede zweite Pixelspalte schwarz.
 - **Space ist kein Leerzeichen-Code-Pfad, sondern Tile-Slot 0**: Wer Space „spart" und aus `font.inc` entfernt, zerstört die Boot-Clear-Invariante (siehe Abschnitt 2, „Space rendert aus Tile-Slot 0"). Slot 0 muss vier Null-Sub-Tiles enthalten.
 
 ### ROM-Header / Hardware
@@ -250,12 +255,6 @@ Diese Features sind noch nicht implementiert. Vor der Umsetzung die Auswirkungen
 
 **Plan:** Entweder den initialen `BG2VOFS`-Wert um 8–16 Pixel nach unten verschieben (effektive Top-Margin einfügen) oder die Anzahl sichtbarer Zeilen (`VISIBLE_ROWS`) um 1–2 reduzieren und den Cursor-Start entsprechend setzen. Auf echter Hardware und im Emulator messen, da Overscan-Bereiche abweichen.
 
-### Hintergrundbild in 4bpp
-
-**Ziel:** Statisches oder animiertes Hintergrundbild auf einem separaten BG-Layer (BG1 oder BG3) hinter dem Text-Layer (BG2).
-
-**Constraint:** BG2 bleibt 2bpp (4 Farben, Schrift). Der neue Layer muss 4bpp sein (16 Farben). Mode 5 erlaubt BG1 in Hi-Res 4bpp und BG2 in 2bpp — das passt. BG1 bekommt eigene Tileset-Daten und eigene CGRAM-Einträge (Palette 0–7 für BG1, 8+ für BG2 oder umgekehrt — exakt planen, kein Palette-Clash). `TM` und `TS` müssen beide Layer aktivieren; `BG1SC`/`BG1NBA` konfigurieren. DMA-Upload beim Boot erweitern.
-
 ### Cursor
 
 **Ziel:** Blinkendes oder statisches Cursor-Glyph an der aktuellen Eingabeposition.
@@ -288,7 +287,7 @@ Diese Features sind noch nicht implementiert. Vor der Umsetzung die Auswirkungen
 2. Neue Button-Kombo hinzugefügt? → `cd snes && make` neu laufen lassen, `keymap.inc` wird regeneriert.
 3. Neues Sonder-Command (`KEY_*`)? → **drei** Stellen: `mappings.yaml`, `gen_keymap.py:SPECIAL_ACTIONS` und `main.asm:@normal_tile`-Switch. Plus ggf. `input_capture.py:CURSES_KEY_MAP` und `mapper.py:CURSES_KEY_NAMES` für den Host-Eingabepfad.
 4. Änderungen an `keyboard_mappings.yaml` brauchen **kein** ROM-Rebuild — sie betreffen nur die Host→Emulator-Übersetzung.
-5. Vor jedem Commit: `python scripts/test_mapping.py` für eine Host-Sanity-Probe; für das ROM `cd snes && make` (muss sauber linken, `fix_checksum.py` läuft automatisch, Output == 32768 Bytes).
-6. Änderungen am SNES-Header (`main.asm` → Segment `HEADER`): Tabelle in Abschnitt 2 aktuell halten und mit `xxd -s 0x7FC0 -l 64 snes/build/terminal.sfc` gegen die erzeugte Datei verifizieren.
+5. Vor jedem Commit: `python scripts/test_mapping.py` für eine Host-Sanity-Probe; für das ROM `cd snes && make` (muss sauber linken, `fix_checksum.py` läuft automatisch, Output == 65536 Bytes).
+6. Änderungen am SNES-Header (`main.asm` → Segment `HEADER`): Tabelle in Abschnitt 2 aktuell halten und mit `xxd -s 0x7FC0 -l 64 snes/build/terminal.sfc` gegen die erzeugte Datei verifizieren. Das ROM ist 64 KiB (2 Bänke): `CODE`/`RODATA` → ROM0 (Bank 0, `$8000–$FFFF`), `RODATA1` → ROM1 (Bank 1, `$18000–$1FFFF`). Große statische Daten (BG1-Tiles, BG1-Tilemap) gehören in `RODATA1`; DMA aus Bank 1 setzt Source-Bank-Byte auf `^label` (= `$01`).
 7. Mode-5-Layout-Änderung (VRAM-Adressen, Dense-Pack-Formel, Interlace-Flag, 16×16-Read-Pattern)? → **immer** zuerst [`AI-MODE-5-README.md`](AI-MODE-5-README.md) lesen. Diese Datei dokumentiert das PPU-Verhalten, auf dem `gen_font.py` + `gen_keymap.py` + `main.asm` aufsetzen. Änderungen müssen zu den dort beschriebenen Invarianten passen.
 8. Eines der geplanten Features aus Abschnitt 5 umsetzen? → Das 8×16-Feature erfordert koordinierte Änderungen in gen_font.py + gen_keymap.py + main.asm; nie nur eine Komponente isoliert ändern.

@@ -11,7 +11,7 @@ Algorithm (LoROM, power-of-two ROM size):
   * Sum every byte of the ROM modulo $10000 -> checksum.
   * Complement = checksum XOR $FFFF.
 
-For a 32 KiB LoROM the header is at file offset $7FC0..$7FDF:
+For a 64 KiB 2-bank LoROM the header is at file offset $7FC0..$7FDF (bank 0):
   $7FDC-$7FDD : checksum complement (little endian)
   $7FDE-$7FDF : checksum            (little endian)
 """
@@ -22,10 +22,10 @@ import sys
 from pathlib import Path
 
 
-HEADER_OFFSET = 0x7FC0        # LoROM header start in a 32 KiB image
+HEADER_OFFSET = 0x7FC0        # LoROM header start in bank 0 (file offset unchanged)
 COMPL_OFFSET = 0x7FDC         # checksum complement (2 bytes, little endian)
 CHECK_OFFSET = 0x7FDE         # checksum            (2 bytes, little endian)
-EXPECTED_SIZE = 32 * 1024     # 32 KiB LoROM
+EXPECTED_SIZE = 64 * 1024     # 64 KiB 2-bank LoROM
 
 
 def patch(path: Path) -> tuple[int, int]:

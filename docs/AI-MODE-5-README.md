@@ -1,21 +1,22 @@
 # AI-MODE-5-README.md
 
-> **Origin note.** This document was ported verbatim from the sibling
-> project [`snes-tile-test`](https://example.invalid/) — it is the
-> authoritative Mode 5 / hi-res / dense-pack reference that
-> `snes-terminal-bridge` relies on for its SNES build path
-> (`snes/src/main.asm`, `snes/tools/gen_font.py`, the keymap emitted
-> by `snes/tools/gen_keymap.py`). The hardware/PPU facts and layout
-> rules described below apply unchanged.
+> **Origin note.** This document was ported from the sibling project
+> [`snes-tile-test`](https://example.invalid/) — it is the authoritative
+> Mode 5 / hi-res / dense-pack reference that `snes-terminal-bridge`
+> relies on for its SNES build path (`snes/src/main.asm`,
+> `snes/tools/gen_font.py`, `snes/tools/gen_assets.py`, the keymap
+> emitted by `snes/tools/gen_keymap.py`). The hardware/PPU facts and
+> layout rules described below apply unchanged.
 >
 > Paths mentioned in the text refer to the original `snes-tile-test`
 > layout and are kept for traceability. Mapping to files in this repo:
 >
 > | Reference in this document | File in this repo |
 > |---|---|
-> | `tools/gen_assets.py` (font / image → dense-pack) | `snes/tools/gen_font.py` |
+> | `tools/gen_assets.py` (image → dense-pack BG1 assets) | `snes/tools/gen_assets.py` (ported directly) |
+> | `tools/gen_assets.py` (font → dense-pack BG2 font) | `snes/tools/gen_font.py` |
 > | `main_mode5_2bpp.s` (Mode 5 boot + BG2 setup) | `snes/src/main.asm` |
-> | `src/palette.s`, image/splash targets | not ported — this repo only uses the 2bpp font path |
+> | `main_mode5_4bpp.s` (BG1 wallpaper) | merged into `snes/src/main.asm` — ROM uses BG1 + BG2 together |
 >
 > See [`AI-README.md`](AI-README.md) §2 / §4 for how those references
 > map onto the terminal ROM's input + keymap pipeline.
@@ -44,7 +45,8 @@ area you are actually allowed to draw in, and how to take a full-screen
 - CGRAM is shared between BG1 and BG2 (see section 6).
 
 This repository uses the **full Mode 5 hi-res + interlace** combination
-(512x448) and writes to BG2 with 16x16 tiles.
+(512x448): BG1 (4bpp, 16x16) for the wallpaper and BG2 (2bpp, 16x16)
+for the text overlay.
 
 ---
 
@@ -180,42 +182,50 @@ BG1 and BG2 draw colours from the **same** CGRAM. Their ranges overlap:
 BG1 sub-palette 0 (`$00..$0F`) covers BG2 sub-palettes 0..3
 (`$00..$03`, `$04..$07`, `$08..$0B`, `$0C..$0F`). Plan accordingly:
 
-- Simple case (this repo): only BG2 is used; BG2 sub-palette 0 lives at
-  CGRAM `$00..$07`, everything above is untouched.
-- BG1 + BG2 together: either reserve disjoint CGRAM windows (e.g. BG1
-  uses `$00..$5F`, BG2 uses `$60..$7F` via sub-palettes 6 and 7), or
-  design BG1's low colours so they double as BG2 palette entries.
+- This repo (BG1 wallpaper + BG2 text): BG1 sub-palette 0 at CGRAM
+  `$00..$0F` (32 bytes, 16 colours); BG2 sub-palette 7 at CGRAM
+  `$1C..$1F` (8 bytes, 4 colours). No overlap. Colour 0 of BG2
+  sub-palette 7 (CGRAM `$1C`) is transparent, so empty cells show the
+  wallpaper beneath.
+- Alternative layout (BG1 + BG2 disjoint, larger BG1 palette): BG1
+  uses `$00..$5F`, BG2 uses `$60..$7F` via sub-palettes 6 and 7.
 
 ---
 
-## 6. BG2 (2bpp) — what this repo actually does
+## 6. BG1 + BG2 — what this repo actually does
 
-End-to-end for [`main_mode5_2bpp.s`](../main_mode5_2bpp.s):
+End-to-end for [`snes/src/main.asm`](../snes/src/main.asm):
 
-1. **Boot init**: standard 65816 native mode, stack, clear WRAM,
-   VRAM, CGRAM.
-2. **`BGMODE = $25`**: mode 5 (`$05`) + bit 5 (`$20`) for BG2 16x16.
-3. **`BG2SC = $10`**: BG2 tilemap base at VRAM word `$1000`, 32x32 size.
-4. **`BG12NBA = $00`**: BG1 char base word `$0000`, BG2 char base
-   word `$0000`. We only use BG2; both nibbles zero is fine.
-5. **`SETINI = $01`**: enable interlace (448 lines).
-6. **Palette DMA** (CGRAM `$00..$07`, 8 bytes, BG2 sub-palette 0).
-7. **Tile DMA**: 24 tiles x 16 bytes = **384 bytes** (`$0180`) at VRAM
-   word `$0000`. Layout:
-   - cross characters at `(0, 1, 16, 17)`
-   - diagonal-X at `(2, 3, 18, 19)`
-   - filled square at `(4, 5, 20, 21)`
-   - checkerboard at `(6, 7, 22, 23)`
-   - slots 8..15 (and by extension 24..31, never uploaded) are blank.
-8. **Tilemap DMA**: 2048 bytes at VRAM word `$1000`. Filled with
-   `$0008` (blank super-tile) except four corner entries:
-   - `(1,1) = 0`, `(30,1) = 2`, `(1,26) = 4`, `(30,26) = 6`.
-9. **`TM = $02` / `TS = $02`**: enable BG2 on both main and sub screens
-   (required because hi-res main/sub interleave).
-10. **`INIDISP = $0F`**: end force-blank, max brightness.
+1. **Boot init**: standard 65816 native mode, stack, clear WRAM, VRAM,
+   CGRAM. Six PPU registers zeroed explicitly (CGADSUB, CGWSEL, TMW,
+   TSW, W12SEL, W34SEL) — critical for real hardware (see §11.2).
+2. **`BGMODE = $35`**: mode 5 (`$05`) + bit 4 (`$10`) for BG1 16x16 +
+   bit 5 (`$20`) for BG2 16x16.
+3. **`BG1SC = $50`**: BG1 tilemap base at VRAM word `$5000`, 32x32 size.
+4. **`BG2SC = $10`**: BG2 tilemap base at VRAM word `$1000`, 32x32 size.
+5. **`BG12NBA = $02`**: BG2 char base nibble `$0` (word `$0000`), BG1
+   char base nibble `$2` (word `$2000`).
+6. **`SETINI = $01`**: enable interlace (448 lines).
+7. **Palette DMA 1** (CGRAM `$00`, 32 bytes): BG1 wallpaper sub-palette 0
+   — 16 BGR555 colours from `palette.bin`.
+8. **Palette DMA 2** (CGRAM `$1C`, 8 bytes): BG2 text sub-palette 7 —
+   4 colours (black, dark grey, light grey, white).
+9. **BG2 Font Tile DMA** (6144 bytes, `$1800`) at VRAM word `$0000`:
+   95 JetBrains Mono glyphs in dense-packed 16x16 super-tiles; slot 0
+   = Space (all-zero, transparent — used by clear/boot invariant).
+10. **BG1 Tile DMA** (`$6000` bytes from ROM bank 1) at VRAM word
+    `$2000`: wallpaper 4bpp tiles, dense-packed super-tiles.
+11. **BG2 Tilemap DMA** (2048 bytes zero-fill) at VRAM word `$1000`:
+    cleared to `$0000` (Space tile, transparent).
+12. **BG1 Tilemap DMA** (2048 bytes from ROM bank 1) at VRAM word
+    `$5000`: wallpaper tilemap with flip flags and palette bits embedded.
+13. **`TM = $03` / `TS = $03`**: enable BG1 + BG2 on both main and sub
+    screens (hi-res requires both screens for full 512-pixel width).
+14. **`INIDISP = $0F`**: end force-blank, max brightness.
 
-The PPU auto-assembles each corner character from its single tilemap
-entry via the `N, N+1, N+16, N+17` pattern.
+Text tilemap entries use `tile_index | $3C00` (priority=1, sub-palette=7)
+so text always renders above BG1 (BG2-P1 > BG1-P0). Empty cells (tile
+`$0000`) are transparent, letting the wallpaper show through.
 
 ---
 

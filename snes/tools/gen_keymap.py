@@ -88,7 +88,8 @@ def build_entries(mappings):
             skipped.append(key_str)
             continue
         bitmask = combo_to_bitmask(buttons)
-        tile    = char_to_tile(key_str)
+        # priority=1 (bit 13) + palette=7 (bits 12-10) = $3C00
+        tile    = char_to_tile(key_str) | 0x3C00
         entries.append((bitmask, tile, key_str, buttons))
     return entries, skipped
 

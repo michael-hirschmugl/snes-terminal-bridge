@@ -1,10 +1,9 @@
 ; =============================================================================
-; SNES Terminal — interactive multi-row input (Mode 5)
+; SNES Terminal — interactive multi-row input (Mode 5) + 4bpp wallpaper
 ;
-; Horizontal hi-res + interlace (512x448), BG2 2bpp, 16x16 dense-packed tiles.
-; Writes a 32x32 tilemap with a single 16-bit entry per on-screen character;
-; the PPU auto-reads the four N, N+1, N+16, N+17 8x8 sub-tiles that make up
-; each 16x16 glyph (see docs/AI-MODE-5-README.md).
+; Horizontal hi-res + interlace (512x448).
+; BG2 2bpp 16x16 dense-packed tiles for text; BG1 4bpp 16x16 tiles for
+; the background wallpaper (linux_wallpaper_512x448_right_4bpp.png).
 ;
 ; Protocol:
 ;   - Combo must be stable (unchanged) for >= 2 consecutive VBlanks (debounce).
@@ -13,18 +12,24 @@
 ;   - KEY_ENTER ($FFFE) moves to a new row; viewport scrolls when needed.
 ;   - KEY_DELETE ($FFFF) erases the last character (sets tilemap entry = 0).
 ;
-; VRAM layout:
-;   $0000-$17FF  BG2 tile data   (384 × 8x8 2bpp tiles = 6144 bytes)
+; VRAM layout (word addresses):
+;   $0000-$0BFF  BG2 tile data   (384 × 8x8 2bpp tiles = 6144 bytes)
 ;                Character C (C = ord(ch) - 0x20) has top-left 8x8 slot
 ;                N(C) = (C // 8) * 32 + (C % 8) * 2; PPU auto-reads
 ;                N, N+1, N+16, N+17 per tilemap entry.
-;   $2000-$27FF  BG2 tilemap     (32×32 entries × 2 bytes = 2048 bytes)
+;   $1000-$13FF  BG2 tilemap     (32×32 entries × 2 bytes = 2048 bytes)
 ;                Zero-cleared at boot; tile index 0 = space (blank glyph).
+;   $2000-$4FFF  BG1 tile data   (768 × 8x8 4bpp tiles = 24576 bytes, bank 1)
+;   $5000-$53FF  BG1 tilemap     (32×32 entries × 2 bytes = 2048 bytes, bank 1)
 ;
-; BG mode:    Mode 5 + interlace (hires 512×448), BG2 only, 16×16 tiles, 2bpp
+; CGRAM layout:
+;   $00-$0F  BG1 sub-palette 0 (16 colours, wallpaper)
+;   $1C-$1F  BG2 sub-palette 7 (4 colours, text AA: transparent/dark/light/white)
+;
+; BG mode:    Mode 5 + interlace (hires 512×448), BG1+BG2, 16×16 tiles
 ; Characters: 16 × 16 px anti-aliased (JetBrains Mono via gen_font.py)
+;             Tilemap entry: priority=1, palette=7 → text renders above wallpaper
 ; Grid:       32 columns × 26 visible rows (32-row circular buffer)
-; Palette:    colour 0 = black, 1 = dark grey, 2 = light grey, 3 = white (AA)
 ; =============================================================================
 
 .setcpu "65816"
@@ -36,8 +41,11 @@
 
 INIDISP  = $2100
 BGMODE   = $2105
+BG1SC    = $2107   ; BG1 tilemap base + size
 BG2SC    = $2108
 BG12NBA  = $210B
+BG1HOFS  = $210D   ; BG1 horizontal scroll (write twice: low then high byte)
+BG1VOFS  = $210E   ; BG1 vertical scroll   (write twice: low then high byte)
 BG2HOFS  = $210F   ; BG2 horizontal scroll (write twice: low then high byte)
 BG2VOFS  = $2110   ; BG2 vertical scroll   (write twice: low then high byte)
 VMAIN    = $2115
@@ -273,10 +281,38 @@ reset:
     sta     MDMAEN
 
     ; =========================================================================
-    ; DMA 1 — BG2 palette (4 colours, 8 bytes) -> CGRAM $00..$07
-    ; Colour 0 = black (backdrop), 1/2 = AA mid-greys, 3 = white.
+    ; DMA 1a — BG1 palette (16 colours, 32 bytes) -> CGRAM $00..$0F
+    ; Sub-palette 0 for BG1 4bpp wallpaper layer.
     ; =========================================================================
     stz     CGADD
+    lda     #$00                ; CPU->PPU, 1-reg, auto-increment
+    sta     DMAP0
+    lda     #$22                ; CGDATA
+    sta     BBAD0
+    lda     #<bg1_palette_data
+    sta     A1TL0
+    lda     #>bg1_palette_data
+    sta     A1TH0
+    lda     #^bg1_palette_data
+    sta     A1B0
+
+    rep     #$20
+    .a16
+    lda     #32
+    sta     DAS0L
+    sep     #$20
+    .a8
+
+    lda     #$01
+    sta     MDMAEN
+
+    ; =========================================================================
+    ; DMA 1b — BG2 text palette (4 colours, 8 bytes) -> CGRAM $1C..$1F
+    ; Sub-palette 7 for BG2 2bpp text layer (priority=1 tiles use palette 7).
+    ; Colour 0 = transparent, 1 = dark grey, 2 = light grey, 3 = white.
+    ; =========================================================================
+    lda     #$1C                ; CGRAM address = sub-palette 7 start
+    sta     CGADD
     lda     #$00                ; CPU->PPU, 1-reg, auto-increment
     sta     DMAP0
     lda     #$22                ; CGDATA
@@ -327,20 +363,91 @@ reset:
     lda     #$01
     sta     MDMAEN
 
-    ; The tilemap at VRAM word $1000 was zero-cleared by the VRAM-wipe above.
-    ; Tile index 0 resolves to the space glyph (space has all-zero sub-tiles in
-    ; gen_font.py's dense-pack layout), so every empty cell already renders as
-    ; transparent black. No initial tilemap DMA is required.
+    ; The BG2 tilemap at VRAM word $1000 was zero-cleared by the VRAM-wipe.
+    ; Tile index 0 = space glyph (all-zero sub-tiles), so every empty cell
+    ; renders as transparent, showing the BG1 wallpaper through.
 
     ; =========================================================================
-    ; BG configuration (Mode 5 + interlace, BG2 16x16)
+    ; DMA 3 — BG1 tile data (4bpp, 24576 bytes, bank 1) -> VRAM word $2000
+    ; gen_assets.py mode5_image produces tiles.4bpp.chr with 768 8x8 tiles
+    ; dense-packed by the same (C//8)*32+(C%8)*2 formula as the font.
     ; =========================================================================
-    lda     #$25                ; Mode 5 + BG2 16x16 (bit 5)
+    lda     #$00
+    sta     VMADDL
+    lda     #$20                ; VRAM word $2000
+    sta     VMADDH
+    lda     #$80                ; increment after high-byte write, +1 word
+    sta     VMAIN
+
+    lda     #$01                ; CPU->PPU, destination increments
+    sta     DMAP0
+    lda     #$18                ; VMDATAL
+    sta     BBAD0
+    lda     #<bg1_tile_data
+    sta     A1TL0
+    lda     #>bg1_tile_data
+    sta     A1TH0
+    lda     #^bg1_tile_data     ; bank $01 (RODATA1 segment)
+    sta     A1B0
+
+    rep     #$20
+    .a16
+    lda     #$6000              ; 24576 bytes
+    sta     DAS0L
+    sep     #$20
+    .a8
+
+    lda     #$01
+    sta     MDMAEN
+
+    ; =========================================================================
+    ; DMA 4 — BG1 tilemap (2048 bytes, bank 1) -> VRAM word $5000
+    ; 32x32 entries; 32x28 visible rows fill 512x448; bottom 4 rows are blank.
+    ; =========================================================================
+    lda     #$00
+    sta     VMADDL
+    lda     #$50                ; VRAM word $5000
+    sta     VMADDH
+    lda     #$80
+    sta     VMAIN
+
+    lda     #$01
+    sta     DMAP0
+    lda     #$18
+    sta     BBAD0
+    lda     #<bg1_tilemap_data
+    sta     A1TL0
+    lda     #>bg1_tilemap_data
+    sta     A1TH0
+    lda     #^bg1_tilemap_data  ; bank $01
+    sta     A1B0
+
+    rep     #$20
+    .a16
+    lda     #$0800              ; 2048 bytes
+    sta     DAS0L
+    sep     #$20
+    .a8
+
+    lda     #$01
+    sta     MDMAEN
+
+    ; =========================================================================
+    ; BG configuration (Mode 5 + interlace, BG1 4bpp + BG2 2bpp, 16x16)
+    ; =========================================================================
+    lda     #$35                ; Mode 5 + BG1 16x16 (bit 4) + BG2 16x16 (bit 5)
     sta     BGMODE
-    lda     #$10                ; tilemap @ word $1000, 32x32
+    lda     #$50                ; BG1 tilemap @ word $5000, 32x32
+    sta     BG1SC
+    lda     #$10                ; BG2 tilemap @ word $1000, 32x32
     sta     BG2SC
-    stz     BG12NBA             ; BG1 char base 0, BG2 char base 0
+    lda     #$02                ; BG1 char base @ word $2000, BG2 char base @ $0000
+    sta     BG12NBA
 
+    stz     BG1HOFS
+    stz     BG1HOFS
+    stz     BG1VOFS
+    stz     BG1VOFS
     stz     BG2HOFS
     stz     BG2HOFS
     stz     BG2VOFS
@@ -349,9 +456,9 @@ reset:
     lda     #$01                ; interlace enable -> 448 lines
     sta     SETINI
 
-    lda     #$02                ; BG2 on main screen (odd hires columns)
+    lda     #$03                ; BG1+BG2 on main screen (odd hires columns)
     sta     TM
-    lda     #$02                ; BG2 on sub  screen (even hires columns)
+    lda     #$03                ; BG1+BG2 on sub  screen (even hires columns)
     sta     TS
 
     ; Real hardware leaves these undefined; emulators default to 0.
@@ -696,10 +803,15 @@ ZeroByte:
 ZeroWord:
     .word $0000
 
-; 2bpp palette: colour 0 = black (backdrop), 1 = dark grey, 2 = light grey,
-; 3 = white. Matches the 4 AA quantisation levels used by gen_font.py.
+; BG1 wallpaper palette: 16 colours (32 bytes) for sub-palette 0 (CGRAM $00-$0F).
+; Generated by tools/gen_assets.py from linux_wallpaper_512x448_right_4bpp.png.
+bg1_palette_data:
+    .incbin "../build/mode5_wallpaper_4bpp/palette.bin"
+
+; BG2 text palette: 4 colours (8 bytes) for sub-palette 7 (CGRAM $1C-$1F).
+; Colour 0 = transparent, 1/2 = AA mid-greys, 3 = white.
 palette_data:
-    .word $0000      ; 0  black
+    .word $0000      ; 0  transparent (BG1 shows through)
     .word $294A      ; 1  dark grey  (r=10,g=10,b=10 in BGR555)
     .word $56B5      ; 2  light grey (r=21,g=21,b=21)
     .word $7FFF      ; 3  white
@@ -715,14 +827,14 @@ keymap_data:
 ; -----------------------------------------------------------------------------
 
 .segment "HEADER"
-    .byte "SNES TERMINAL        "
+    .byte "SNES TERMINAL+WALL   "
     .byte $20                    ; map mode: LoROM, SlowROM
     .byte $00                    ; cartridge type: ROM only
     .byte $08                    ; ROM size: $08 required for Everdrive LoROM mapping
                                  ; ($05 = 32 KiB per SNES spec, but Everdrive maps
                                  ; it as "8m" and places ROM at wrong address; $08
                                  ; makes Everdrive select "512k" mapping, which
-                                 ; correctly mirrors the 32 KiB ROM)
+                                 ; correctly mirrors this ROM)
     .byte $00                    ; RAM size: 0
     .byte $02                    ; destination code: Europe (PAL)
     .byte $00                    ; old licensee code (Nintendo)
@@ -749,3 +861,16 @@ keymap_data:
     .word nmi_handler
     .word reset
     .word irq_handler
+
+; -----------------------------------------------------------------------------
+; BG1 wallpaper data — bank 1 ($01:8000+), RODATA1 segment
+; Loaded by DMA 3 (tiles -> VRAM $2000) and DMA 4 (tilemap -> VRAM $5000).
+; -----------------------------------------------------------------------------
+
+.segment "RODATA1"
+
+bg1_tile_data:
+    .incbin "../build/mode5_wallpaper_4bpp/tiles.4bpp.chr"
+
+bg1_tilemap_data:
+    .incbin "../build/mode5_wallpaper_4bpp/tilemap.bin"
