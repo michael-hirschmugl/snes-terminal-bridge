@@ -100,8 +100,9 @@ def super_tile_vram_base(k: int) -> int:
 #   BASELINE_Y — row index (0=top, 15=bottom) where the baseline sits inside
 #                the cell. Everything above is ascender/cap space, everything
 #                below is descender space. Raise/lower to taste.
-FONT_SIZE  = 16
-BASELINE_Y = 13
+FONT_SIZE    = 16
+BASELINE_Y   = 13
+GLYPH_X_BIAS = 4   # px from cell left edge to glyph centre (default centred = 8)
 
 FONT_PATH = Path(__file__).parent / "fonts" / "JetBrainsMono-Regular.ttf"
 
@@ -148,7 +149,7 @@ def render_char(char: str, font) -> list[list[int]]:
     # cropping at a constant offset from cy.
     draw.text((cx, cy), char, fill=255, font=font, anchor="ms")
 
-    crop_left = cx - CELL_W // 2
+    crop_left = cx - GLYPH_X_BIAS
     crop_top  = cy - BASELINE_Y
     cell = img.crop((crop_left, crop_top, crop_left + CELL_W, crop_top + CELL_H))
 
