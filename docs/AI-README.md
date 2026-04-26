@@ -17,7 +17,7 @@ Das Projekt besteht aus **zwei unabhängigen, über eine YAML-Datei gekoppelten 
 │                             │          │  ROM: src/main.asm               │
 │  curses getch               │          │    Mode 5 + Interlace 512×448    │
 │    → queue.Queue            │          │    BG2 2bpp, 16×16 Dense-Pack    │
-│    → mapper.lookup          │          │    32×26 Scroll-Grid, 1 Tile/Ch  │
+│    → mapper.lookup          │          │    30×26 Grid (16px Rand), 1T/Ch │
 │    → KeyboardInjector       │          │                                  │
 │        (xdotool XTest)      │          │                                  │
 │           │  X11 Keystate   │          │                                  │
@@ -90,7 +90,7 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 - **Direct-Page-Variablen `$00–$0F`**: alle Zustandsflags und Cursor-Position liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste.
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
 - **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden.
-- **32-row circular buffer + `BG2VOFS = top_vram_row * 16`**: Tilemap ist 32×32 (eine Screen-Page reicht, weil 16×16-Tiles 32×26 = fast volle Höhe abdecken), sichtbar sind 32×26. Scrollen: `cursor_y` erhöhen (mod 32), `top_vram_row` nachziehen, neue Zeile in VRAM clearen (**1 Section**, 32 Word-Writes — kein Boundary-Wrap).
+- **32-row circular buffer + `BG2VOFS = (top_vram_row * 16 - 16) & $1FF`**: Tilemap ist 32×32, sichtbar 30×26 (Spalten 1–30, `LEFT_COL=1`/`RIGHT_COL=30`; Spalten 0 und 31 immer leer = linker/rechter 16px-Rand). Das `−16` im BG2VOFS verschiebt die Anzeige um 1 Tile nach unten: Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15 als oberer Rand. Beim Scrollen: `top_vram_row` nachziehen, **alte** `top_vram_row`-Zeile clearen (wird neue Rand-Zeile), dann neue `cursor_y`-Zeile clearen (**je 1 Section**, 32 Word-Writes — kein Boundary-Wrap). Unterer Rand: Zeile `top_vram_row + 26` wird nie beschrieben → Screen-Y=432–447 bleibt leer.
 - **Tilemap-Einträge sind VRAM-Slot-Indizes, nicht Char-Indizes**: Das Low-Byte des Tilemap-Worts ist `N(C) = (C//8)*32 + (C%8)*2`, nicht `C`. Das High-Byte trägt Flip/Palette/Priority; für Textzeichen $3C oder $3D (Priority=1, Sub-Palette=7) — vorcodiert in `gen_keymap.py`, **kein** CPU-seitiges OR im Hot-Path. `gen_keymap.py` liefert das fertig kodierte 16-Bit-Wort in `keymap.inc`, der ASM-Code stellt nur `pending_tile_{lo,hi}` aus der Lookup-Tabelle in VRAM — **keine** CPU-seitige Umrechnung.
 - **Space rendert aus Tile-Slot 0**: Die Zero-Clear-DMA beim Reset setzt die gesamte Tilemap (Bereich `$1000..$17FF`) auf `$0000`. Tilemap-Index 0 zeigt auf die vier Sub-Tiles der Space-Glyphe (alle Bytes 0, weil `gen_font.py` Space so kodiert). Deshalb ist **kein** dedizierter Blank-Index-Fill nötig; das ROM verlässt sich auf diese Invariante. Wer in `gen_font.py` Space nicht-leer macht, zerstört den Boot-Bildschirm.
 - **Debounce + Dedupe doppelt**: `stable_cnt ≥ 2` verhindert Frame-Rauschen, `last_trig_{lo,hi}` verhindert Auto-Repeat beim Gehalten-Halten derselben Kombo. Beide sind nötig.
@@ -204,6 +204,7 @@ Wenn sich die ROM-Größe ändert (z. B. zu 64 KiB), müssen `$FFD7` **und** `sn
 - **Neue Special-Action vergessen in `gen_keymap.py:SPECIAL_ACTIONS` einzutragen** → wird in `@normal_tile` als gültiger Tile-Index behandelt und schreibt Schrott in VRAM. Sentinels leben im Bereich `$FF00–$FFFF` (High-Byte = `$FF`); neue Aktionen dort anhängen + in `main.asm` den `@normal_tile`-Switch ergänzen.
 - **Keymap-Reihenfolge irrelevant, aber Sentinel `$0000,$0000` muss existieren** — `@scan_loop` stoppt sonst nie. `gen_keymap.py` schreibt ihn automatisch ans Ende.
 - **`cursor_y` ist (mod 32)**. Viewport sind 26 Zeilen (`VISIBLE_ROWS` im Header), 32 ist der zirkuläre Puffer. Wer das mit der Viewport-Höhe verwechselt, berechnet `BG2VOFS` falsch.
+- **`cursor_x`-Init muss nach dem WRAM-DMA-Clear stehen**, nicht davor. Der DMA-Clear überschreibt alle WRAM-Adressen (inklusive Direct-Page $0000 = `cursor_x`) mit Null. Wer `cursor_x = LEFT_COL` vor dem DMA-Clear setzt, bekommt `cursor_x = 0` in der ersten Zeile (alle weiteren Zeilen sind korrekt, weil der Newline-Handler `cursor_x` explizit setzt).
 - **Tile-Bytes in der Pending-Queue sind schon das komplette 16-Bit-Wort**: `pending_tile_lo` = low byte von `N(C) | $3C00`, `pending_tile_hi` = high byte ($3C/$3D für Textzeichen, $FF für Sentinels). Kein `* 2`, kein `+ 1`, kein `OR` mit Palette-Bits im ASM. Alles was im Tilemap landen soll, muss vorher in `gen_keymap.py` kodiert werden. Dadurch bleibt der Hot-Path VRAM-Write ein einziger 16-Bit-Store.
 - **BG-Register falsch gesetzt** → black screen oder gescrambelte Tiles. Kanonische Werte: `BGMODE=$35` (Mode 5 + BG1 16×16 + BG2 16×16), `BG1SC=$50` (BG1 Tilemap @ Word `$5000`, 32×32), `BG2SC=$10` (BG2 Tilemap @ Word `$1000`, 32×32), `BG12NBA=$02` (BG2 Char-Base @ Word `$0000`, BG1 Char-Base @ Word `$2000`). Wenn das Char-Base von BG2 verschoben wird, muss `FONT_BYTES` und die Tile-Upload-Adresse in `main.asm` mit.
 - **`TM`/`TS` dürfen BG-Layer nicht nur auf einem Screen haben**: Hi-Res verlangt jeden aktiven Layer auf Main **und** Sub. `TM=TS=$03` (BG1+BG2). Wer nur `TM=$03` setzt, sieht jede zweite Pixelspalte schwarz.
@@ -249,11 +250,9 @@ Diese Features sind noch nicht implementiert. Vor der Umsetzung die Auswirkungen
 
 **Invariante, die sich ändert:** Der aktuelle `N, N+1, N+16, N+17`-Auto-Read der PPU ist ein Merkmal von 16×16-BG-Tiles. Bei 8×8-BG-Tiles liest die PPU genau einen Slot pro Tilemap-Eintrag — das vereinfacht die Adressrechnung, erfordert aber explizite Writes für beide Zeilen.
 
-### Overscan-Beschnitt oben beheben
+### ~~Overscan-Beschnitt oben beheben~~ ✅ Implementiert (2026-04-26)
 
-**Problem:** Die obersten Textzeilen werden am oberen Bildschirmrand abgeschnitten (TV-Overscan oder falscher Anfangs-`BG2VOFS`-Offset).
-
-**Plan:** Entweder den initialen `BG2VOFS`-Wert um 8–16 Pixel nach unten verschieben (effektive Top-Margin einfügen) oder die Anzahl sichtbarer Zeilen (`VISIBLE_ROWS`) um 1–2 reduzieren und den Cursor-Start entsprechend setzen. Auf echter Hardware und im Emulator messen, da Overscan-Bereiche abweichen.
+`BG2VOFS` wird dauerhaft um −16 versetzt (`BG2VOFS = top_vram_row * 16 − 16`, 9-Bit-Maske). Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15. Spalten 0 und 31 werden nie beschrieben → linker/rechter Rand. Beim Scrollen wird die alte `top_vram_row` als neue Rand-Zeile geleert. `cursor_x` startet nach WRAM-DMA-Clear bei `LEFT_COL=1` (nicht nach dem DP-Nullsetzen — das würde der DMA-Clear überschreiben).
 
 ### Cursor
 

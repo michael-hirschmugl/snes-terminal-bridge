@@ -29,7 +29,7 @@
 ; BG mode:    Mode 5 + interlace (hires 512×448), BG1+BG2, 16×16 tiles
 ; Characters: 16 × 16 px anti-aliased (JetBrains Mono via gen_font.py)
 ;             Tilemap entry: priority=1, palette=7 → text renders above wallpaper
-; Grid:       32 columns × 26 visible rows (32-row circular buffer)
+; Grid:       30 columns × 26 visible rows (cols 1-30, 16px margin all sides)
 ; =============================================================================
 
 .setcpu "65816"
@@ -99,11 +99,15 @@ VISIBLE_ROWS    = 26               ; rows kept on screen before scrolling
 TILEMAP_ROWS    = 32               ; circular buffer size
 ROW_PIXEL_H     = 16               ; 16x16 tile -> 16 pixel row height
 
+LEFT_COL        = 1                ; first writable column (16px left margin)
+RIGHT_COL       = 30               ; last  writable column (16px right margin)
+USABLE_COLS     = 30               ; RIGHT_COL - LEFT_COL + 1
+
 ; -----------------------------------------------------------------------------
 ; Direct-page variables ($00-$0F, zeroed in init)
 ; -----------------------------------------------------------------------------
 
-cursor_x        = $00   ; current column (0-31)
+cursor_x        = $00   ; current column (LEFT_COL..RIGHT_COL = 1..30)
 prev_joy_lo     = $01   ; JOY1L from previous frame
 prev_joy_hi     = $02   ; JOY1H from previous frame
 stable_cnt      = $03   ; consecutive frames with same joypad state
@@ -450,8 +454,10 @@ reset:
     stz     BG1VOFS
     stz     BG2HOFS
     stz     BG2HOFS
-    stz     BG2VOFS
-    stz     BG2VOFS
+    lda     #$F0                ; BG2VOFS = $01F0 = -16 (9-bit): tilemap row 31
+    sta     BG2VOFS             ;   at screen Y=0 -> permanent blank top margin
+    lda     #$01
+    sta     BG2VOFS
 
     lda     #$01                ; interlace enable -> 448 lines
     sta     SETINI
@@ -477,6 +483,9 @@ reset:
 
     lda     #$0F                ; display on, full brightness
     sta     INIDISP
+
+    lda     #LEFT_COL           ; WRAM DMA cleared cursor_x to 0; restore now
+    sta     cursor_x
 
 ; =============================================================================
 ; Main loop
@@ -523,7 +532,7 @@ reset:
     ; -----------------------------------------------------------------------
 @normal_tile:
     lda     cursor_x
-    cmp     #32
+    cmp     #RIGHT_COL + 1
     bcc     :+
     jmp     @no_pending          ; line full, newline still pending
 :
@@ -541,10 +550,10 @@ reset:
     lda     pending_tile_hi      ; flip/palette/priority bits (= 0 here)
     sta     VMDATAH
 
-    ; advance cursor; 32 = line full -> queue newline for next VBlank
+    ; advance cursor; > RIGHT_COL -> line full, queue newline for next VBlank
     inc     cursor_x
     lda     cursor_x
-    cmp     #32
+    cmp     #RIGHT_COL + 1
     bcs     :+
     jmp     @no_pending
 :
@@ -561,6 +570,7 @@ reset:
     ; -----------------------------------------------------------------------
 @do_delete:
     lda     cursor_x
+    cmp     #LEFT_COL
     bne     :+
     jmp     @no_pending
 :
@@ -603,7 +613,9 @@ reset:
     and     #$1F
     sta     top_vram_row
 
-    ; BG2VOFS = top_vram_row * 16  (max 31 * 16 = 496 = $01F0, 9 bits)
+    ; BG2VOFS = (top_vram_row * 16 - 16) & $1FF
+    ; -16 shifts display down 1 row: row 31 (blank) appears at screen top.
+    ; When top_vram_row=0: $0000 - $0010 = $FFF0 & $01FF = $01F0 -> row 31 ✓
     rep     #$20
     .a16
     lda     top_vram_row
@@ -612,11 +624,42 @@ reset:
     asl
     asl
     asl                          ; * 16
+    sec
+    sbc     #$0010               ; - 16
+    and     #$01FF               ; mask to 9 bits
     sep     #$20
     .a8
     sta     BG2VOFS              ; low byte
     xba
     sta     BG2VOFS              ; high byte
+
+    ; Clear old top_vram_row (= new blank margin row now visible at screen top).
+    ; old_top_vram_row = (cursor_y - VISIBLE_ROWS) & $1F
+    rep     #$20
+    .a16
+    lda     cursor_y
+    and     #$001F
+    sec
+    sbc     #VISIBLE_ROWS
+    and     #$001F               ; old_top_vram_row
+    asl
+    asl
+    asl
+    asl
+    asl                          ; * 32
+    clc
+    adc     #TILEMAP_WORD
+    sta     VMADDL
+    sep     #$20
+    .a8
+
+    ldx     #32
+@cl_margin_row:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @cl_margin_row
+
 @newline_no_scroll:
 
     ; --- Clear new tilemap row: 32 sequential word writes --------------------
@@ -643,7 +686,8 @@ reset:
     dex
     bne     @cl_row
 
-    stz     cursor_x
+    lda     #LEFT_COL
+    sta     cursor_x
     bra     @no_pending
 
 @no_pending:
