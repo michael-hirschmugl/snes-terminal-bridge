@@ -165,7 +165,7 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 
 | Feature | Notes |
 |---|---|
-| **8×16 character cells** | Switch from 16×16 to 8×16 px per glyph (two 8×8 tiles stacked). Most glyphs fit in 8 px width, so the grid would widen from 32 to 64 columns. Requires updated `gen_font.py`, `gen_keymap.py` (two tile addresses per char), and `main.asm`. |
+| ~~**8×16 character cells**~~ | ❌ Not achievable in Mode 5. BG2 8×8 tiles are lo-res — each renders 16 px wide regardless of tile size, so the column count stays at 30. Attempted in `experiment/left-align-font`. |
 | ~~**Fix top-of-screen clipping**~~ | ✅ Implemented — 16px margin on all sides via `BG2VOFS` offset and `cursor_x` column restriction. |
 | ~~**Background image (4bpp)**~~ | ✅ Implemented — full-screen linux wallpaper on BG1 (4bpp) behind BG2 text. |
 | **Cursor** | Blinking or static cursor glyph at the current input position. |

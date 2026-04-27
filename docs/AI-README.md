@@ -236,19 +236,9 @@ Wenn sich die ROM-Größe ändert (z. B. zu 64 KiB), müssen `$FFD7` **und** `sn
 
 Diese Features sind noch nicht implementiert. Vor der Umsetzung die Auswirkungen auf die gesamte Pipeline (gen_font.py → gen_keymap.py → main.asm) durchdenken.
 
-### 8×16-Zeichenzellen (zwei 8×8-Tiles pro Glyph)
+### ~~8×16-Zeichenzellen~~ — Dead End (nicht umsetzbar in Mode 5)
 
-**Ziel:** Breite der Zeichenzellen von 16 auf 8 Pixel halbieren → Grid-Breite verdoppelt sich von 32 auf 64 Spalten.
-
-**Warum möglich:** Die meisten JetBrains-Mono-Glyphen sind in einer 8-Pixel-Breite gut lesbar; die aktuelle 16×16-Zelle (vier 8×8-Sub-Tiles) enthält im Wesentlichen zwei leere Spalten links/rechts.
-
-**Was sich ändert:**
-- `gen_font.py`: Glyphen in 8×16-Zellen rendern statt 16×16. Pro Glyph entstehen zwei 8×8-Sub-Tiles (oben + unten), keine vier mehr.
-- `gen_keymap.py` + `keymap.inc`: Pro Zeichen **zwei** VRAM-Tile-Adressen (Top-Tile-Slot `N_top`, Bottom-Tile-Slot `N_bot`) statt einer. Das `.word bitmask, .word tile`-Schema wird zu `.word bitmask, .word top_tile, .word bot_tile`.
-- `main.asm`: Tilemap-Write pro Zeichen erfordert jetzt zwei Einträge (zwei aufeinanderfolgende Tilemap-Wörter in derselben Spalte, verschiedene Zeilen). Der Cursor muss in 8-Pixel-Schritten wandern, `cursor_x` läuft bis 64. BG-Mode und VRAM-Adressen bleiben gleich (BG2 2bpp 8×8-Tiles sind weiterhin gültig; 16×16 war nur ein Tilemap-Merkmal, keine Hardware-Pflicht).
-- Tilemap-Adressrechnung: Bei 8×16-Zellen ist ein Zeichen `(cursor_y * 2, cursor_x)` im 32×64-Tilemap-Raster (zwei Tilemap-Zeilen pro sichtbarer Textzeile). BGMODE muss auf 8×8-Tiles umgestellt werden (`BGMODE = $05` → BG2 8×8 statt 16×16).
-
-**Invariante, die sich ändert:** Der aktuelle `N, N+1, N+16, N+17`-Auto-Read der PPU ist ein Merkmal von 16×16-BG-Tiles. Bei 8×8-BG-Tiles liest die PPU genau einen Slot pro Tilemap-Eintrag — das vereinfacht die Adressrechnung, erfordert aber explizite Writes für beide Zeilen.
+Versucht in Branch `experiment/left-align-font` (Commit `24cfa25`). Ergebnis: In Mode 5 sind BG2-Tiles immer **lo-res** — jedes 8×8-Tile rendert 16 px breit auf dem Bildschirm, unabhängig von der Tile-Größe. `BGMODE $15` (BG2 8×8) statt `$35` (BG2 16×16) liefert weiterhin nur 30 sichtbare Spalten, genauso viele wie der aktuelle 16×16-Ansatz, aber ohne die Hi-Res-Anti-Aliasing-Schärfe. Ein 64-Spalten-Grid ist mit BG2 in Mode 5 physisch nicht erreichbar. **Nicht nochmal versuchen.**
 
 ### ~~Overscan-Beschnitt oben beheben~~ ✅ Implementiert (2026-04-26)
 
@@ -289,4 +279,4 @@ Diese Features sind noch nicht implementiert. Vor der Umsetzung die Auswirkungen
 5. Vor jedem Commit: `python scripts/test_mapping.py` für eine Host-Sanity-Probe; für das ROM `cd snes && make` (muss sauber linken, `fix_checksum.py` läuft automatisch, Output == 65536 Bytes).
 6. Änderungen am SNES-Header (`main.asm` → Segment `HEADER`): Tabelle in Abschnitt 2 aktuell halten und mit `xxd -s 0x7FC0 -l 64 snes/build/terminal.sfc` gegen die erzeugte Datei verifizieren. Das ROM ist 64 KiB (2 Bänke): `CODE`/`RODATA` → ROM0 (Bank 0, `$8000–$FFFF`), `RODATA1` → ROM1 (Bank 1, `$18000–$1FFFF`). Große statische Daten (BG1-Tiles, BG1-Tilemap) gehören in `RODATA1`; DMA aus Bank 1 setzt Source-Bank-Byte auf `^label` (= `$01`).
 7. Mode-5-Layout-Änderung (VRAM-Adressen, Dense-Pack-Formel, Interlace-Flag, 16×16-Read-Pattern)? → **immer** zuerst [`AI-MODE-5-README.md`](AI-MODE-5-README.md) lesen. Diese Datei dokumentiert das PPU-Verhalten, auf dem `gen_font.py` + `gen_keymap.py` + `main.asm` aufsetzen. Änderungen müssen zu den dort beschriebenen Invarianten passen.
-8. Eines der geplanten Features aus Abschnitt 5 umsetzen? → Das 8×16-Feature erfordert koordinierte Änderungen in gen_font.py + gen_keymap.py + main.asm; nie nur eine Komponente isoliert ändern.
+8. Eines der geplanten Features aus Abschnitt 5 umsetzen? → Vor der Umsetzung Abschnitt 5 lesen; das 8×16-Feature ist ein dokumentierter Dead End und darf nicht nochmal versucht werden.
