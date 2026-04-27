@@ -103,6 +103,12 @@ def super_tile_vram_base(k: int) -> int:
 FONT_SIZE  = 16
 BASELINE_Y = 13
 
+# Set to 0 to auto-detect advance width from font metrics; set to a specific
+# pixel count to override (smaller value = more stretch, larger = less).
+# The natural advance width (~10px at size 16) is cropped, then scaled to
+# CELL_W=16 horizontally so glyphs fill the full character cell.
+RENDER_W   = 0
+
 FONT_PATH = Path(__file__).parent / "fonts" / "JetBrainsMono-Regular.ttf"
 
 # Preview contact sheet
@@ -125,11 +131,14 @@ PREVIEW_SHADES = [
 # Rendering
 # ---------------------------------------------------------------------------
 
-def render_char(char: str, font) -> list[list[int]]:
+def render_char(char: str, font, render_w: int) -> list[list[int]]:
     """
     Render `char` using anti-aliased FreeType rendering, then quantise to
     4 shading levels (0..3) inside a CELL_W × CELL_H cell with the glyph
     baseline sitting on row BASELINE_Y.
+
+    render_w controls the horizontal crop window before scaling to CELL_W.
+    When render_w < CELL_W the glyph is stretched to fill the full cell width.
 
     Returns CELL_H rows of CELL_W ints (each 0..3).
     """
@@ -148,9 +157,13 @@ def render_char(char: str, font) -> list[list[int]]:
     # cropping at a constant offset from cy.
     draw.text((cx, cy), char, fill=255, font=font, anchor="ms")
 
-    crop_left = cx - CELL_W // 2
+    crop_left = cx - render_w // 2
     crop_top  = cy - BASELINE_Y
-    cell = img.crop((crop_left, crop_top, crop_left + CELL_W, crop_top + CELL_H))
+    cell = img.crop((crop_left, crop_top, crop_left + render_w, crop_top + CELL_H))
+
+    # Stretch horizontally so glyphs fill the full CELL_W.
+    if render_w != CELL_W:
+        cell = cell.resize((CELL_W, CELL_H), Image.LANCZOS)
 
     raw = cell.tobytes()
     rows: list[list[int]] = []
@@ -255,9 +268,11 @@ def main() -> None:
             f"JetBrains Mono font not found at {FONT_PATH}.\n"
             f"Download JetBrainsMono-Regular.ttf into {FONT_PATH.parent}/"
         )
-    print(f"Font: {FONT_PATH.name}  size={FONT_SIZE}px  baseline_y={BASELINE_Y}")
-
     font = ImageFont.truetype(str(FONT_PATH), FONT_SIZE)
+
+    render_w = RENDER_W if RENDER_W > 0 else round(font.getlength("M"))
+    print(f"Font: {FONT_PATH.name}  size={FONT_SIZE}px  "
+          f"advance_width={render_w}px → cell={CELL_W}px  baseline_y={BASELINE_Y}")
 
     out_dir         = Path(__file__).parent.parent / "assets"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -279,7 +294,7 @@ def main() -> None:
     slot_meta: list[tuple[str, str] | None] = [None] * total_slots
 
     for C, char in enumerate(chars):
-        cell = render_char(char, font)
+        cell = render_char(char, font, render_w)
         rendered_chars.append(cell)
 
         N   = super_tile_vram_base(C)
