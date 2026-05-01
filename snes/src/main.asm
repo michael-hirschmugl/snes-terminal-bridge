@@ -103,6 +103,9 @@ LEFT_COL        = 1                ; first writable column (16px left margin)
 RIGHT_COL       = 30               ; last  writable column (16px right margin)
 USABLE_COLS     = 30               ; RIGHT_COL - LEFT_COL + 1
 
+CURSOR_TILE_LO  = $EE              ; '_' ASCII 95, tile N(63)=238
+CURSOR_TILE_HI  = $3C              ; priority=1, palette=7
+
 ; -----------------------------------------------------------------------------
 ; Direct-page variables ($00-$0F, zeroed in init)
 ; -----------------------------------------------------------------------------
@@ -122,6 +125,7 @@ boot_ready      = $0B   ; $01 after first clean frame (all buttons released)
 cursor_y        = $0C   ; current character row (0-31, circular)
 top_vram_row    = $0D   ; topmost visible character row (0-31)
 addr_scratch    = $0E   ; 16-bit VRAM word address scratch ($0E=low, $0F=high)
+blink_ctr       = $10   ; cursor blink counter; bit 5 drives ~1Hz blink
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -207,7 +211,7 @@ reset:
     ; -------------------------------------------------------------------------
     ; Zero direct-page variables $00-$0F
     ; -------------------------------------------------------------------------
-    ldx     #$000F
+    ldx     #$0010
     .i16
 @zero_dp:
     stz     $00,x
@@ -502,6 +506,20 @@ reset:
     beq     @wait_vblank
 
     ; -------------------------------------------------------------------------
+    ; Cursor erase — overwrite cursor cell with blank before pending tile
+    ; changes cursor_x/cursor_y, so the old position is always cleaned up.
+    ; -------------------------------------------------------------------------
+    jsr     calc_tilemap_addr
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    stz     VMDATAL
+    stz     VMDATAH
+
+    ; -------------------------------------------------------------------------
     ; Write pending tilemap entry to VRAM
     ; -------------------------------------------------------------------------
     lda     pending_flag
@@ -691,6 +709,26 @@ reset:
     bra     @no_pending
 
 @no_pending:
+
+    ; -------------------------------------------------------------------------
+    ; Cursor blink draw
+    ; -------------------------------------------------------------------------
+    inc     blink_ctr
+    lda     blink_ctr
+    and     #$20                ; bit 5: 0 = on, $20 = off
+    bne     @cursor_done        ; off → cursor already erased above
+    jsr     calc_tilemap_addr
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    lda     #CURSOR_TILE_LO
+    sta     VMDATAL
+    lda     #CURSOR_TILE_HI
+    sta     VMDATAH
+@cursor_done:
 
     ; -------------------------------------------------------------------------
     ; Wait for VBlank to end before reading joypad

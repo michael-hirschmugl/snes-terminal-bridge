@@ -59,10 +59,13 @@ Ein einziger Main-Loop, alle Entscheidungen im Frame-Raster:
 
 ```
 @main_loop:
-  wait VBlank → pending tile → VRAM write  ┐
-  wait VBlank-end → wait auto-joypad        │  1 Tilemap-Word (16 bit) schreiben
-  snapshot JOY1L/JOY1H                      │  — die PPU liest N, N+1, N+16, N+17
-  debounce (stable_cnt ≥ 2)                 ┘  automatisch.
+  wait VBlank
+  cursor erase  (write 0,0 to current cursor cell — before pending tile moves cursor_x/y)
+  pending tile  → VRAM write  ┐  1 Tilemap-Word (16 bit) schreiben
+  cursor draw   (blink_ctr bit 5 = 0: write CURSOR_TILE to new cursor_x/y)
+  wait VBlank-end → wait auto-joypad        │  — die PPU liest N, N+1, N+16, N+17
+  snapshot JOY1L/JOY1H                      │  automatisch.
+  debounce (stable_cnt ≥ 2)                 ┘
   boot-guard (buttons=0 mindestens einmal gesehen)
   dedupe (last_trig_*)
   linear scan: keymap_data → pending_tile_{lo,hi} + pending_flag
@@ -87,7 +90,7 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 
 ### SNES
 
-- **Direct-Page-Variablen `$00–$0F`**: alle Zustandsflags und Cursor-Position liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste.
+- **Direct-Page-Variablen `$00–$10`**: alle Zustandsflags, Cursor-Position und Blink-Counter liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `blink_ctr` ($10) ist die zuletzt hinzugefügte Variable; die Init-Zero-Schleife deckt jetzt `$00–$10` ab.
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
 - **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden.
 - **32-row circular buffer + `BG2VOFS = (top_vram_row * 16 - 16) & $1FF`**: Tilemap ist 32×32, sichtbar 30×26 (Spalten 1–30, `LEFT_COL=1`/`RIGHT_COL=30`; Spalten 0 und 31 immer leer = linker/rechter 16px-Rand). Das `−16` im BG2VOFS verschiebt die Anzeige um 1 Tile nach unten: Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15 als oberer Rand. Beim Scrollen: `top_vram_row` nachziehen, **alte** `top_vram_row`-Zeile clearen (wird neue Rand-Zeile), dann neue `cursor_y`-Zeile clearen (**je 1 Section**, 32 Word-Writes — kein Boundary-Wrap). Unterer Rand: Zeile `top_vram_row + 26` wird nie beschrieben → Screen-Y=432–447 bleibt leer.
@@ -249,11 +252,14 @@ Versucht in Branch `experiment/left-align-font` (Commit `24cfa25`). Ergebnis: In
 
 `BG2VOFS` wird dauerhaft um −16 versetzt (`BG2VOFS = top_vram_row * 16 − 16`, 9-Bit-Maske). Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15. Spalten 0 und 31 werden nie beschrieben → linker/rechter Rand. Beim Scrollen wird die alte `top_vram_row` als neue Rand-Zeile geleert. `cursor_x` startet nach WRAM-DMA-Clear bei `LEFT_COL=1` (nicht nach dem DP-Nullsetzen — das würde der DMA-Clear überschreiben).
 
-### Cursor
+### ~~Cursor~~ ✅ Implementiert (2026-05-01)
 
-**Ziel:** Blinkendes oder statisches Cursor-Glyph an der aktuellen Eingabeposition.
+Blinkendes `_`-Zeichen (Unterstrich, ASCII 95, Tile $EE/$3C) an der aktuellen Eingabeposition.
 
-**Ansatz:** Entweder einen dedizierten Cursor-Glyph in `font.inc` (z. B. Unterstrich oder Block), der per VBlank-Toggle zwischen sichtbar/unsichtbar wechselt (Blink via Frame-Counter), oder Palette-Flip des aktuellen Zeichen-Tiles (invertiert Vordergrund/Hintergrund). Der Cursor-Write muss mit dem Pending-Write-System kompatibel sein (kein Konflikt wenn gleichzeitig ein neues Zeichen geschrieben wird).
+**Implementierung:**
+- Neues DP-Variable `blink_ctr` ($10), von der Init-Nullschleife abgedeckt.
+- **Erase-before-draw-Muster** (verhindert Geisterzeichen bei Delete/Newline): Am Anfang jedes VBlanks — *bevor* das Pending Tile `cursor_x/cursor_y` verändert — wird die aktuelle Cursor-Zelle mit `0,0` überschrieben. Danach läuft der normale Pending-Tile-Pfad. Am `@no_pending` wird `blink_ctr` inkrementiert; wenn Bit 5 = 0 (32-Frame-Phase → ~1 Hz bei PAL 50 fps), wird `CURSOR_TILE_LO/HI` ($EE/$3C) in die Tilemap-Zelle an `(cursor_x, cursor_y)` geschrieben.
+- Kein Extra-Puffer, keine NMI nötig — alles im bestehenden VBlank-Poll-Raster.
 
 ### Willkommensnachricht
 

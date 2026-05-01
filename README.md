@@ -106,7 +106,7 @@ Effective resolution is 512×448 (interlaced). BG1 shows a retro SNES RPG-style 
 
 The ROM receives joypad combos from the bridge, looks up the corresponding ASCII character, and displays it in a scrolling terminal grid. Characters appear left-to-right, row by row, with Enter advancing to a new line and the viewport scrolling automatically once the visible 26 rows are filled. Backspace erases the last character.
 
-**Screen at startup:** Intentionally blank — characters appear as you type.
+**Screen at startup:** Intentionally blank — a blinking `_` cursor appears at column 1 immediately. Characters appear as you type, and the cursor follows.
 
 **Protocol:**
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
@@ -169,7 +169,7 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 | ~~**8×16 character cells**~~ | ❌ Not achievable in Mode 5. BG2 8×8 tiles are lo-res — each renders 16 px wide regardless of tile size, so the column count stays at 30. Attempted in `experiment/left-align-font`. |
 | ~~**Fix top-of-screen clipping**~~ | ✅ Implemented — 16px margin on all sides via `BG2VOFS` offset and `cursor_x` column restriction. |
 | ~~**BG1 decorative layer**~~ | ✅ Full-screen wallpaper (2026-04-25) → replaced with SNES RPG retro border frame (2026-04-27): blue gradient + gold ◆ corners, `gen_border.py`. |
-| **Cursor** | Blinking or static cursor glyph at the current input position. |
+| ~~**Cursor**~~ | ✅ Blinking `_` at current input position — erase/draw per VBlank, ~1 Hz (2026-05-01). |
 | **Welcome message** | Short boot splash (project name / version) displayed immediately after ROM init. |
 | **Line input buffer** | Buffer typed characters locally so Backspace and cursor keys work in-line before the line is submitted with Enter. |
 | **Terminal prompt** | Prompt string (e.g. `> `) prepended to each new input line. |
