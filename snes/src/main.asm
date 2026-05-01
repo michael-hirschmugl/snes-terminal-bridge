@@ -482,14 +482,16 @@ reset:
     stz     $2123               ; W12SEL: no BG1/BG2 window enables
     stz     $2124               ; W34SEL: no BG3/BG4 window enables
 
+    lda     #LEFT_COL           ; WRAM DMA cleared cursor_x to 0; restore now
+    sta     cursor_x
+
+    jsr     print_welcome_msg   ; write welcome message to VRAM (screen still blanked)
+
     lda     #$01                ; enable auto-joypad read
     sta     NMITIMEN
 
     lda     #$0F                ; display on, full brightness
     sta     INIDISP
-
-    lda     #LEFT_COL           ; WRAM DMA cleared cursor_x to 0; restore now
-    sta     cursor_x
 
 ; =============================================================================
 ; Main loop
@@ -874,6 +876,66 @@ reset:
     .i8
     jmp     @main_loop
 
+; =============================================================================
+; print_welcome_msg — write welcome_data to VRAM during init (screen blanked).
+;
+; Reads .word entries from welcome_data: printable chars as tile words
+; (0x3C00|N), $FFFF = newline, $0000 = end sentinel.
+; Reuses calc_tilemap_addr + pending_tile_lo/hi/addr_scratch.
+; Entry: A=8-bit, X=8-bit, cursor_x=LEFT_COL, cursor_y=0, VMAIN=$80.
+; Exit:  A=8-bit, X=8-bit; cursor at row after last message line.
+; =============================================================================
+
+print_welcome_msg:
+    rep     #$10
+    .i16
+    ldx     #$0000
+@pw_loop:
+    rep     #$20
+    .a16
+    lda     welcome_data,x
+    sep     #$20
+    .a8
+    sta     pending_tile_lo
+    xba
+    sta     pending_tile_hi
+    lda     pending_tile_lo
+    ora     pending_tile_hi
+    beq     @pw_done            ; $0000 = sentinel
+    lda     pending_tile_lo
+    and     pending_tile_hi
+    cmp     #$FF
+    beq     @pw_nl              ; $FFFF = newline
+    inx
+    inx
+    jsr     calc_tilemap_addr
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL              ; 16-bit store sets VMADDL+VMADDH
+    sep     #$20
+    .a8
+    lda     pending_tile_lo
+    sta     VMDATAL
+    lda     pending_tile_hi
+    sta     VMDATAH
+    inc     cursor_x
+    bra     @pw_loop
+@pw_nl:
+    inx
+    inx
+    lda     cursor_y
+    inc     a
+    and     #$1F
+    sta     cursor_y
+    lda     #LEFT_COL
+    sta     cursor_x
+    bra     @pw_loop
+@pw_done:
+    sep     #$10
+    .i8
+    rts
+
 ; -----------------------------------------------------------------------------
 ; Data
 ; -----------------------------------------------------------------------------
@@ -903,6 +965,9 @@ font_tiles:
 
 keymap_data:
 .include "../assets/keymap.inc"
+
+welcome_data:
+.include "../assets/welcome.inc"
 
 ; -----------------------------------------------------------------------------
 ; SNES internal header  ($FFC0-$FFE3)

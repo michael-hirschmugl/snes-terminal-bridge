@@ -57,7 +57,8 @@ snes_terminal_bridge/
 
 config/
 ├── mappings.yaml          # ASCII → SNES button combinations (97 characters mapped)
-└── keyboard_mappings.yaml # SNES button → emulator keyboard key
+├── keyboard_mappings.yaml # SNES button → emulator keyboard key
+└── welcome.ini            # Boot welcome message (plain text, ≤26 lines, ≤30 chars each)
 
 assets/
 └── SNES-ASCII-Map.ods  # Reference spreadsheet: all 128 ASCII chars mapped to SNES combos
@@ -80,6 +81,7 @@ snes/
     ├── gen_font.py        # Renders TTF font → 2bpp 16×16 dense-packed VRAM block
     ├── gen_keymap.py      # Reads mappings.yaml → keymap.inc (with priority=1/palette=7 bits)
     ├── gen_border.py      # Generates BG1 retro border frame → palette.bin + tiles.4bpp.chr + tilemap.bin
+    ├── gen_welcome.py     # Reads config/welcome.ini → welcome.inc (tile words for boot message)
     ├── gen_assets.py      # PNG → 4bpp palette/tiles/tilemap binaries (mode5_image pipeline; dev use)
     ├── crop_image.py      # Image scaling/cropping helper used by gen_assets.py
     ├── fix_checksum.py    # Post-link SNES-header checksum patcher
@@ -106,7 +108,7 @@ Effective resolution is 512×448 (interlaced). BG1 shows a retro SNES RPG-style 
 
 The ROM receives joypad combos from the bridge, looks up the corresponding ASCII character, and displays it in a scrolling terminal grid. Characters appear left-to-right, row by row, with Enter advancing to a new line and the viewport scrolling automatically once the visible 26 rows are filled. Backspace erases the last character.
 
-**Screen at startup:** Intentionally blank — a blinking `_` cursor appears at column 1 immediately. Characters appear as you type, and the cursor follows.
+**Screen at startup:** The welcome message from `config/welcome.ini` is displayed immediately (up to 26 lines, 30 chars each, ASCII printable). A blinking `_` cursor appears on the first blank line below it. Characters appear as you type, and the cursor follows.
 
 **Protocol:**
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
@@ -170,7 +172,7 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 | ~~**Fix top-of-screen clipping**~~ | ✅ Implemented — 16px margin on all sides via `BG2VOFS` offset and `cursor_x` column restriction. |
 | ~~**BG1 decorative layer**~~ | ✅ Full-screen wallpaper (2026-04-25) → replaced with SNES RPG retro border frame (2026-04-27): blue gradient + gold ◆ corners, `gen_border.py`. |
 | ~~**Cursor**~~ | ✅ Blinking `_` at current input position — erase/draw per VBlank, ~1 Hz (2026-05-01). |
-| **Welcome message** | Short boot splash (project name / version) displayed immediately after ROM init. |
+| ~~**Welcome message**~~ | ✅ Displayed at boot from `config/welcome.ini` — `gen_welcome.py` converts it to tile words at build time; `print_welcome_msg` writes directly to VRAM before screen enable (2026-05-01). |
 | **Line input buffer** | Buffer typed characters locally so Backspace and cursor keys work in-line before the line is submitted with Enter. |
 | **Terminal prompt** | Prompt string (e.g. `> `) prepended to each new input line. |
 

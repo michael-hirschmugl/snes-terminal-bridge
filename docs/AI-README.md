@@ -129,6 +129,10 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
   - `crop_image.py` ist ein Hilfsmodul für Skalierung/Crop, das von `gen_assets.py` importiert wird.
 - **`gen_keymap.py` erzeugt ein Artefakt** aus `mappings.yaml`:
   - `keymap.inc` — Tilemap-Wort `N(C) = (C//8)*32 + (C%8)*2 | $3C00` (Dense-Pack-VRAM-Slot + Priority=1 + Sub-Palette=7). Enthält pro Mapping-Eintrag `.word bitmask, .word tile_word`, mit `SPECIAL_ACTIONS`-Sentinels (`$FFFF`=DELETE, `$FFFE`=ENTER) und Terminator-Word `$0000,$0000`.
+- **`gen_welcome.py` erzeugt ein Artefakt** aus `config/welcome.ini` (Plain-Text, `;`/`#`-Kommentarzeilen werden übersprungen, Leerzeilen → leere Bildschirmzeile):
+  - `assets/welcome.inc` — Sequenz von `.word`-Einträgen: pro Zeichen `0x3C00 | N(C)` (dasselbe Tilemap-Wort wie `keymap.inc`), `$FFFF` als Zeilenvorschub-Marker, `$0000` als End-Sentinel. Werden zur Init-Zeit von `print_welcome_msg` direkt (ohne VBlank-Queue) in den BG2-Tilemap-VRAM geschrieben, bevor `INIDISP = $0F` die Anzeige aktiviert.
+  - Grenzen (hartes `sys.exit` bei Überschreitung): max. 26 Zeilen (`VISIBLE_ROWS`), max. 30 Zeichen pro Zeile (`USABLE_COLS`), nur ASCII `0x20–0x7E`.
+  - Make-Abhängigkeit: `$(WELCOME)` hängt von `../config/welcome.ini` ab, sodass `make` bei einer Änderung der Nachricht automatisch neu baut.
 - **Post-Link-Checksum-Patch**: nach `ld65` läuft zwingend `python3 tools/fix_checksum.py <rom>`. Der Linker kann die Checksumme nicht berechnen, weil sie sich selbst enthält — das Script setzt erst `complement=$FFFF`, `checksum=$0000`, summiert alle Bytes (mod `$10000`), schreibt `checksum` an `$FFDE/$FFDF` und `complement = checksum XOR $FFFF` an `$FFDC/$FFDD`. Ohne den Patch lehnen Flash-Cartridges das ROM ab. Der Makefile koppelt den Schritt ans Linken — **nicht** entfernen oder nur einzeln `ld65` aufrufen.
 
 ### SNES-Header (Pflichtfelder, `main.asm` → Segment `HEADER`)
@@ -261,11 +265,15 @@ Blinkendes `_`-Zeichen (Unterstrich, ASCII 95, Tile $EE/$3C) an der aktuellen Ei
 - **Erase-before-draw-Muster** (verhindert Geisterzeichen bei Delete/Newline): Am Anfang jedes VBlanks — *bevor* das Pending Tile `cursor_x/cursor_y` verändert — wird die aktuelle Cursor-Zelle mit `0,0` überschrieben. Danach läuft der normale Pending-Tile-Pfad. Am `@no_pending` wird `blink_ctr` inkrementiert; wenn Bit 5 = 0 (32-Frame-Phase → ~1 Hz bei PAL 50 fps), wird `CURSOR_TILE_LO/HI` ($EE/$3C) in die Tilemap-Zelle an `(cursor_x, cursor_y)` geschrieben.
 - Kein Extra-Puffer, keine NMI nötig — alles im bestehenden VBlank-Poll-Raster.
 
-### Willkommensnachricht
+### ~~Willkommensnachricht~~ ✅ Implementiert (2026-05-01)
 
-**Ziel:** Kurze Startup-Nachricht (z. B. Projektname und Version) direkt nach ROM-Init, bevor der Benutzer tippt.
+Beim Boot zeigt das ROM den Inhalt von `config/welcome.ini` an (bis zu 26 Zeilen, 30 Zeichen je).
 
-**Ansatz:** Nach dem DMA-Upload und vor dem Eintritt in `@main_loop` eine feste Zeichenkette Zeile für Zeile in die Tilemap schreiben (jedes Zeichen ein Tilemap-Word, wie im normalen Render-Pfad). Oder als separate Init-Routine, die `pending_tile` + `cursor_x/y` sequenziell setzt und je einen synthetischen VBlank abwartet.
+**Implementierung:**
+- `snes/tools/gen_welcome.py` liest die `.ini`, validiert, und erzeugt `snes/assets/welcome.inc` mit `.word`-Einträgen: je ein Tilemap-Wort pro Zeichen (`0x3C00 | N(C)`), `$FFFF` als Zeilenvorschub-Marker, `$0000` als End-Sentinel.
+- `print_welcome_msg` (65816-Subroutine in `main.asm`) läuft in der Init-Sequenz nach dem DMA-Upload, aber *vor* `INIDISP = $0F` (Bildschirm noch geblankt). Sie liest `welcome_data` mit 16-Bit-X-Index, schreibt jedes Tilemap-Wort direkt per `VMADDL/VMDATAL/VMDATAH` an die mit `calc_tilemap_addr` berechnete VRAM-Adresse — keine VBlank-Queue, weil der Screen geblankt ist.
+- Prozessor-Zustand: Eintritt A=8-Bit/X=8-Bit; Routine schaltet intern auf X=16-Bit (wie `@do_lookup`); Rückkehr A=8-Bit/X=8-Bit.
+- `cursor_x/cursor_y` zeigen nach der Routine auf die erste freie Zeile; der `@main_loop` beginnt dort direkt.
 
 ### Zeileneingabe-Puffer
 
@@ -291,3 +299,4 @@ Blinkendes `_`-Zeichen (Unterstrich, ASCII 95, Tile $EE/$3C) an der aktuellen Ei
 6. Änderungen am SNES-Header (`main.asm` → Segment `HEADER`): Tabelle in Abschnitt 2 aktuell halten und mit `xxd -s 0x7FC0 -l 64 snes/build/terminal.sfc` gegen die erzeugte Datei verifizieren. Das ROM ist 64 KiB (2 Bänke): `CODE`/`RODATA` → ROM0 (Bank 0, `$8000–$FFFF`), `RODATA1` → ROM1 (Bank 1, `$18000–$1FFFF`). Große statische Daten (BG1-Tiles, BG1-Tilemap) gehören in `RODATA1`; DMA aus Bank 1 setzt Source-Bank-Byte auf `^label` (= `$01`).
 7. Mode-5-Layout-Änderung (VRAM-Adressen, Dense-Pack-Formel, Interlace-Flag, 16×16-Read-Pattern)? → **immer** zuerst [`AI-MODE-5-README.md`](AI-MODE-5-README.md) lesen. Diese Datei dokumentiert das PPU-Verhalten, auf dem `gen_font.py` + `gen_keymap.py` + `main.asm` aufsetzen. Änderungen müssen zu den dort beschriebenen Invarianten passen.
 8. Eines der geplanten Features aus Abschnitt 5 umsetzen? → Vor der Umsetzung Abschnitt 5 lesen; das 8×16-Feature ist ein dokumentierter Dead End und darf nicht nochmal versucht werden.
+9. **Welcome-Message geändert** (`config/welcome.ini` editiert)? → `cd snes && make` reicht — die Makefile-Abhängigkeit auf `../config/welcome.ini` triggert `gen_welcome.py` automatisch. Kein manuelles `make font` nötig. Grenzen (`≤26 Zeilen`, `≤30 Zeichen/Zeile`, ASCII `0x20–0x7E`) werden bei Build-Zeit geprüft.
