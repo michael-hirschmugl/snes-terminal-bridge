@@ -90,9 +90,9 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 
 ### SNES
 
-- **Direct-Page-Variablen `$00–$10`**: alle Zustandsflags, Cursor-Position und Blink-Counter liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `blink_ctr` ($10) ist die zuletzt hinzugefügte Variable; die Init-Zero-Schleife deckt jetzt `$00–$10` ab.
+- **Direct-Page-Variablen `$00–$11`**: alle Zustandsflags, Cursor-Position, Blink-Counter und Auto-Wrap-Flag liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `auto_wrap` ($11) ist die zuletzt hinzugefügte Variable; die Init-Zero-Schleife deckt `$00–$11` ab.
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
-- **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden.
+- **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden. Auto-Wrap (Zeilenumbruch am rechten Rand) setzt dasselbe `$FFFE`-Sentinel, aber zusätzlich `auto_wrap = $01` ($11). `@do_newline` unterscheidet so Enter (Prompt schreiben) von Auto-Wrap (nur Cursor auf LEFT_COL reset, kein Prompt).
 - **32-row circular buffer + `BG2VOFS = (top_vram_row * 16 - 16) & $1FF`**: Tilemap ist 32×32, sichtbar 30×26 (Spalten 1–30, `LEFT_COL=1`/`RIGHT_COL=30`; Spalten 0 und 31 immer leer = linker/rechter 16px-Rand). Das `−16` im BG2VOFS verschiebt die Anzeige um 1 Tile nach unten: Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15 als oberer Rand. Beim Scrollen: `top_vram_row` nachziehen, **alte** `top_vram_row`-Zeile clearen (wird neue Rand-Zeile), dann neue `cursor_y`-Zeile clearen (**je 1 Section**, 32 Word-Writes — kein Boundary-Wrap). Unterer Rand: Zeile `top_vram_row + 26` wird nie beschrieben → Screen-Y=432–447 bleibt leer.
 - **Tilemap-Einträge sind VRAM-Slot-Indizes, nicht Char-Indizes**: Das Low-Byte des Tilemap-Worts ist `N(C) = (C//8)*32 + (C%8)*2`, nicht `C`. Das High-Byte trägt Flip/Palette/Priority; für Textzeichen $3C oder $3D (Priority=1, Sub-Palette=7) — vorcodiert in `gen_keymap.py`, **kein** CPU-seitiges OR im Hot-Path. `gen_keymap.py` liefert das fertig kodierte 16-Bit-Wort in `keymap.inc`, der ASM-Code stellt nur `pending_tile_{lo,hi}` aus der Lookup-Tabelle in VRAM — **keine** CPU-seitige Umrechnung.
 - **Space rendert aus Tile-Slot 0**: Die Zero-Clear-DMA beim Reset setzt die gesamte Tilemap (Bereich `$1000..$17FF`) auf `$0000`. Tilemap-Index 0 zeigt auf die vier Sub-Tiles der Space-Glyphe (alle Bytes 0, weil `gen_font.py` Space so kodiert). Deshalb ist **kein** dedizierter Blank-Index-Fill nötig; das ROM verlässt sich auf diese Invariante. Wer in `gen_font.py` Space nicht-leer macht, zerstört den Boot-Bildschirm.
@@ -281,11 +281,16 @@ Beim Boot zeigt das ROM den Inhalt von `config/welcome.ini` an (bis zu 26 Zeilen
 
 **Ansatz:** Separater WRAM-Puffer (z. B. 64 Bytes bei `$7E0100`) für die aktuelle Eingabezeile. Render-Pfad schreibt Zeichen in den Puffer und gleichzeitig temporär in die Tilemap (Live-Vorschau). Bei Backspace: Puffer und Tilemap-Eintrag gemeinsam zurücksetzen. Bei Enter: Puffer in die „committed"-Tilemap-Zeile übernehmen, neue Zeile beginnen, Puffer leeren.
 
-### Terminal-Prompt
+### ~~Terminal-Prompt~~ ✅ Implementiert (2026-05-02)
 
-**Ziel:** Prompt-String (z. B. `> `) am Anfang jeder neuen Eingabezeile, bevor der Cursor erscheint.
+`>` (ASCII 62, Tile-Index `$6C = (30//8)*32 + (30%8)*2`, C = 0-indexiert ab Space) wird bei jedem Enter an `LEFT_COL` der neuen Zeile geschrieben; Cursor startet bei `PROMPT_COL = LEFT_COL + 1 = 2`.
 
-**Ansatz:** Nach Enter / Zeilenvorschub die Prompt-Zeichen automatisch in Tilemap schreiben (gleicher Pfad wie Willkommensnachricht) und `cursor_x` hinter den Prompt-End setzen. Prompt-Länge als Konstante in `main.asm` führen.
+**Implementierung:**
+- Neues DP-Variable `auto_wrap` ($11), von der Init-Nullschleife abgedeckt.
+- `print_prompt`-Subroutine: setzt `cursor_x = LEFT_COL`, ruft `calc_tilemap_addr` auf, schreibt Tile `$6C / $3C` direkt per `VMADDL/VMDATAL/VMDATAH`, setzt `cursor_x = PROMPT_COL`.
+- Beim Boot nach `print_welcome_msg` aufgerufen (Screen noch geblankt).
+- In `@do_newline`: `auto_wrap` prüfen — wenn gesetzt (Auto-Wrap vom rechten Rand), `cursor_x = LEFT_COL` setzen, kein Prompt; wenn nicht gesetzt (Enter), `print_prompt` aufrufen.
+- **Tile-Index-Formel:** C ist 0-indexiert ab Space (nicht raw ASCII). `>` hat C = 62 − 32 = 30; Tile = `(30//8)*32 + (30%8)*2 = $6C`. Verwechslung mit raw ASCII 62 ergibt `$EC` — ein anderes Zeichen.
 
 ---
 

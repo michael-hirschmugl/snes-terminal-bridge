@@ -102,12 +102,13 @@ ROW_PIXEL_H     = 16               ; 16x16 tile -> 16 pixel row height
 LEFT_COL        = 1                ; first writable column (16px left margin)
 RIGHT_COL       = 30               ; last  writable column (16px right margin)
 USABLE_COLS     = 30               ; RIGHT_COL - LEFT_COL + 1
+PROMPT_COL      = LEFT_COL + 1    ; cursor lands here after the ">" prompt
 
 CURSOR_TILE_LO  = $EE              ; '_' ASCII 95, tile N(63)=238
 CURSOR_TILE_HI  = $3C              ; priority=1, palette=7
 
 ; -----------------------------------------------------------------------------
-; Direct-page variables ($00-$0F, zeroed in init)
+; Direct-page variables ($00-$11, zeroed in init)
 ; -----------------------------------------------------------------------------
 
 cursor_x        = $00   ; current column (LEFT_COL..RIGHT_COL = 1..30)
@@ -126,6 +127,7 @@ cursor_y        = $0C   ; current character row (0-31, circular)
 top_vram_row    = $0D   ; topmost visible character row (0-31)
 addr_scratch    = $0E   ; 16-bit VRAM word address scratch ($0E=low, $0F=high)
 blink_ctr       = $10   ; cursor blink counter; bit 5 drives ~1Hz blink
+auto_wrap       = $11   ; $01 = newline was triggered by line-wrap, not Enter
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -486,6 +488,7 @@ reset:
     sta     cursor_x
 
     jsr     print_welcome_msg   ; write welcome message to VRAM (screen still blanked)
+    jsr     print_prompt        ; print "> " and position cursor at PROMPT_COL
 
     lda     #$01                ; enable auto-joypad read
     sta     NMITIMEN
@@ -583,6 +586,7 @@ reset:
     sta     pending_tile_hi
     lda     #$01
     sta     pending_flag
+    sta     auto_wrap           ; mark as auto-wrap (not Enter)
     jmp     @no_pending
 
     ; -----------------------------------------------------------------------
@@ -706,8 +710,13 @@ reset:
     dex
     bne     @cl_row
 
-    lda     #LEFT_COL
+    lda     auto_wrap
+    stz     auto_wrap
+    beq     :+                  ; not auto-wrap → print prompt
+    lda     #LEFT_COL           ; auto-wrap: reset cursor without prompt
     sta     cursor_x
+    bra     @no_pending
+:   jsr     print_prompt        ; Enter only: print ">" and set cursor_x = PROMPT_COL
     bra     @no_pending
 
 @no_pending:
@@ -934,6 +943,32 @@ print_welcome_msg:
 @pw_done:
     sep     #$10
     .i8
+    rts
+
+; =============================================================================
+; print_prompt — write '>' tile at (cursor_y, LEFT_COL), set cursor_x = PROMPT_COL.
+;
+; Must be called during VBlank or while screen is blanked (direct VRAM write).
+; Entry: A=8-bit, cursor_y = current row, VMAIN=$80.
+; Exit:  A=8-bit, cursor_x = PROMPT_COL.
+; =============================================================================
+
+print_prompt:
+    lda     #LEFT_COL
+    sta     cursor_x
+    jsr     calc_tilemap_addr       ; addr_scratch = VRAM word addr of (cursor_y, LEFT_COL)
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    lda     #$6C                    ; '>' tile index low byte  (index 30 from space: (30//8)*32+(30%8)*2 = $6C)
+    sta     VMDATAL
+    lda     #$3C                    ; priority=1, palette=7
+    sta     VMDATAH
+    lda     #PROMPT_COL
+    sta     cursor_x
     rts
 
 ; -----------------------------------------------------------------------------
