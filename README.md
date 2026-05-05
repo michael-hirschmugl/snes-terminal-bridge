@@ -110,12 +110,14 @@ The ROM receives joypad combos from the bridge, looks up the corresponding ASCII
 
 **Screen at startup:** The welcome message from `config/welcome.ini` is displayed immediately (up to 26 lines, 30 chars each, ASCII printable). A blinking `_` cursor appears on the first blank line below it. Characters appear as you type, and the cursor follows.
 
+**Line input buffer:** Each input line holds up to 29 characters (columns 2–30, after the `>` prompt). When the line is full, further input is silently blocked and the cursor disappears (parked off-screen). Backspace removes the last character; Enter commits the line and opens a new prompt.
+
 **Protocol:**
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
 - ROM debounces: bitmask must be stable for ≥ 2 consecutive VBlanks (~33 ms) before triggering
 - Same combo is not re-triggered until all buttons are released (no key repeat while held)
 - On match, a single 16-bit tilemap word is written to VRAM at the next VBlank; the PPU auto-reads the four 8×8 sub-tiles that make up the 16×16 glyph
-- Cursor advances left-to-right, auto-wraps at column 31 (column 31 is the right margin; writable columns 1–30)
+- Cursor advances left-to-right; input is blocked at column 30 (right margin) — no auto-wrap (writable columns 2–30 after the `>` prompt)
 
 **Special actions** (non-printable):
 
@@ -173,8 +175,8 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 | ~~**BG1 decorative layer**~~ | ✅ Full-screen wallpaper (2026-04-25) → replaced with SNES RPG retro border frame (2026-04-27): blue gradient + gold ◆ corners, `gen_border.py`. |
 | ~~**Cursor**~~ | ✅ Blinking `_` at current input position — erase/draw per VBlank, ~1 Hz (2026-05-01). |
 | ~~**Welcome message**~~ | ✅ Displayed at boot from `config/welcome.ini` — `gen_welcome.py` converts it to tile words at build time; `print_welcome_msg` writes directly to VRAM before screen enable (2026-05-01). |
-| **Line input buffer** | Buffer typed characters locally so Backspace and cursor keys work in-line before the line is submitted with Enter. |
-| **Terminal prompt** | Prompt string (e.g. `> `) prepended to each new input line. |
+| ~~**Terminal prompt**~~ | ✅ `>` prepended to each new input line; cursor starts at column 2 (2026-05-02). |
+| ~~**Line input buffer**~~ | ✅ 29-char limit per line (columns 2–30); input blocked when full, cursor hidden; Backspace decrements counter; Enter resets it (2026-05-05). |
 
 ### Building the ROM
 

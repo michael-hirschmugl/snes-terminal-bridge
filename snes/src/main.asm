@@ -103,6 +103,7 @@ LEFT_COL        = 1                ; first writable column (16px left margin)
 RIGHT_COL       = 30               ; last  writable column (16px right margin)
 USABLE_COLS     = 30               ; RIGHT_COL - LEFT_COL + 1
 PROMPT_COL      = LEFT_COL + 1    ; cursor lands here after the ">" prompt
+INPUT_BUF_MAX   = 29              ; RIGHT_COL - PROMPT_COL + 1 (chars per input line)
 
 CURSOR_TILE_LO  = $EE              ; '_' ASCII 95, tile N(63)=238
 CURSOR_TILE_HI  = $3C              ; priority=1, palette=7
@@ -128,6 +129,7 @@ top_vram_row    = $0D   ; topmost visible character row (0-31)
 addr_scratch    = $0E   ; 16-bit VRAM word address scratch ($0E=low, $0F=high)
 blink_ctr       = $10   ; cursor blink counter; bit 5 drives ~1Hz blink
 auto_wrap       = $11   ; $01 = newline was triggered by line-wrap, not Enter
+buf_len         = $12   ; chars in current input line (0–INPUT_BUF_MAX); zeroed by WRAM DMA at boot
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -513,7 +515,11 @@ reset:
     ; -------------------------------------------------------------------------
     ; Cursor erase — overwrite cursor cell with blank before pending tile
     ; changes cursor_x/cursor_y, so the old position is always cleaned up.
+    ; Skip when cursor_x > RIGHT_COL (buffer full, cursor parked off-screen).
     ; -------------------------------------------------------------------------
+    lda     cursor_x
+    cmp     #RIGHT_COL + 1
+    bcs     @skip_erase
     jsr     calc_tilemap_addr
     rep     #$20
     .a16
@@ -523,6 +529,7 @@ reset:
     .a8
     stz     VMDATAL
     stz     VMDATAH
+@skip_erase:
 
     ; -------------------------------------------------------------------------
     ; Write pending tilemap entry to VRAM
@@ -573,13 +580,18 @@ reset:
     lda     pending_tile_hi      ; flip/palette/priority bits (= 0 here)
     sta     VMDATAH
 
-    ; advance cursor; > RIGHT_COL -> line full, queue newline for next VBlank
+    ; advance cursor; > RIGHT_COL -> buffer full, clamp (no auto-wrap)
     inc     cursor_x
     lda     cursor_x
     cmp     #RIGHT_COL + 1
     bcs     :+
     jmp     @no_pending
 :
+    lda     buf_len
+    cmp     #INPUT_BUF_MAX
+    bcc     @no_clamp
+    jmp     @no_pending         ; buffer full: cursor stays at 31 (off-screen), erase/blink skipped below
+@no_clamp:
     lda     #$FE
     sta     pending_tile_lo
     lda     #$FF
@@ -594,11 +606,12 @@ reset:
     ; -----------------------------------------------------------------------
 @do_delete:
     lda     cursor_x
-    cmp     #LEFT_COL
+    cmp     #PROMPT_COL
     bne     :+
     jmp     @no_pending
 :
     dec     cursor_x
+    dec     buf_len
     jsr     calc_tilemap_addr
 
     rep     #$20
@@ -616,6 +629,7 @@ reset:
     ;             needed (BG2VOFS), clear the new row (32 tilemap words).
     ; -----------------------------------------------------------------------
 @do_newline:
+    stz     buf_len             ; reset input buffer for new line
     ; cursor_y = (cursor_y + 1) & $1F
     lda     cursor_y
     inc     a
@@ -722,9 +736,12 @@ reset:
 @no_pending:
 
     ; -------------------------------------------------------------------------
-    ; Cursor blink draw
+    ; Cursor blink draw — skipped when cursor_x > RIGHT_COL (buffer full)
     ; -------------------------------------------------------------------------
     inc     blink_ctr
+    lda     cursor_x
+    cmp     #RIGHT_COL + 1
+    bcs     @cursor_done        ; parked off-screen: no visible cursor
     lda     blink_ctr
     and     #$20                ; bit 5: 0 = on, $20 = off
     bne     @cursor_done        ; off → cursor already erased above
@@ -867,8 +884,18 @@ reset:
     sta     pending_tile_lo
     lda     keymap_data+3,x
     sta     pending_tile_hi
+    ; Special keys (Enter=$FE/$FF, Delete=$FF/$FF) bypass buffer limit check
+    cmp     #$FF
+    beq     @set_pending
+    ; Normal char: block if buffer full
+    lda     buf_len
+    cmp     #INPUT_BUF_MAX
+    bcs     @scan_done          ; buf_len >= MAX → discard
+    inc     buf_len
+@set_pending:
     lda     #$01
     sta     pending_flag
+@scan_done:
     sep     #$10
     .i8
     jmp     @main_loop

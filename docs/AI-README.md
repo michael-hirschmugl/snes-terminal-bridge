@@ -90,9 +90,9 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 
 ### SNES
 
-- **Direct-Page-Variablen `$00–$11`**: alle Zustandsflags, Cursor-Position, Blink-Counter und Auto-Wrap-Flag liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `auto_wrap` ($11) ist die zuletzt hinzugefügte Variable; die Init-Zero-Schleife deckt `$00–$11` ab.
+- **Direct-Page-Variablen `$00–$12`**: alle Zustandsflags, Cursor-Position, Blink-Counter, Auto-Wrap-Flag und Buffer-Länge liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `buf_len` ($12) ist die zuletzt hinzugefügte Variable; sie wird **nicht** von der expliziten Init-Zero-Schleife (`$00–$10`) abgedeckt, sondern vom WRAM-DMA-Clear beim Boot (nullt das gesamte WRAM inkl. $12).
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
-- **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden. Auto-Wrap (Zeilenumbruch am rechten Rand) setzt dasselbe `$FFFE`-Sentinel, aber zusätzlich `auto_wrap = $01` ($11). `@do_newline` unterscheidet so Enter (Prompt schreiben) von Auto-Wrap (nur Cursor auf LEFT_COL reset, kein Prompt).
+- **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden. Auto-Wrap ist durch den Line-Input-Buffer **deaktiviert**: wenn `buf_len >= INPUT_BUF_MAX` (29) und `cursor_x` nach einem Schreibvorgang auf 31 springt, wird kein `$FFFE`-Sentinel gesetzt; stattdessen parkiert `cursor_x` bei 31 (off-screen), Blink und Cursor-Erase werden übersprungen. `@do_newline` unterscheidet weiterhin Enter (Prompt schreiben) von Auto-Wrap via `auto_wrap` ($11) — aber Auto-Wrap tritt unter normalen Bedingungen nicht mehr auf.
 - **32-row circular buffer + `BG2VOFS = (top_vram_row * 16 - 16) & $1FF`**: Tilemap ist 32×32, sichtbar 30×26 (Spalten 1–30, `LEFT_COL=1`/`RIGHT_COL=30`; Spalten 0 und 31 immer leer = linker/rechter 16px-Rand). Das `−16` im BG2VOFS verschiebt die Anzeige um 1 Tile nach unten: Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15 als oberer Rand. Beim Scrollen: `top_vram_row` nachziehen, **alte** `top_vram_row`-Zeile clearen (wird neue Rand-Zeile), dann neue `cursor_y`-Zeile clearen (**je 1 Section**, 32 Word-Writes — kein Boundary-Wrap). Unterer Rand: Zeile `top_vram_row + 26` wird nie beschrieben → Screen-Y=432–447 bleibt leer.
 - **Tilemap-Einträge sind VRAM-Slot-Indizes, nicht Char-Indizes**: Das Low-Byte des Tilemap-Worts ist `N(C) = (C//8)*32 + (C%8)*2`, nicht `C`. Das High-Byte trägt Flip/Palette/Priority; für Textzeichen $3C oder $3D (Priority=1, Sub-Palette=7) — vorcodiert in `gen_keymap.py`, **kein** CPU-seitiges OR im Hot-Path. `gen_keymap.py` liefert das fertig kodierte 16-Bit-Wort in `keymap.inc`, der ASM-Code stellt nur `pending_tile_{lo,hi}` aus der Lookup-Tabelle in VRAM — **keine** CPU-seitige Umrechnung.
 - **Space rendert aus Tile-Slot 0**: Die Zero-Clear-DMA beim Reset setzt die gesamte Tilemap (Bereich `$1000..$17FF`) auf `$0000`. Tilemap-Index 0 zeigt auf die vier Sub-Tiles der Space-Glyphe (alle Bytes 0, weil `gen_font.py` Space so kodiert). Deshalb ist **kein** dedizierter Blank-Index-Fill nötig; das ROM verlässt sich auf diese Invariante. Wer in `gen_font.py` Space nicht-leer macht, zerstört den Boot-Bildschirm.
@@ -275,11 +275,18 @@ Beim Boot zeigt das ROM den Inhalt von `config/welcome.ini` an (bis zu 26 Zeilen
 - Prozessor-Zustand: Eintritt A=8-Bit/X=8-Bit; Routine schaltet intern auf X=16-Bit (wie `@do_lookup`); Rückkehr A=8-Bit/X=8-Bit.
 - `cursor_x/cursor_y` zeigen nach der Routine auf die erste freie Zeile; der `@main_loop` beginnt dort direkt.
 
-### Zeileneingabe-Puffer
+### ~~Zeileneingabe-Puffer~~ ✅ Implementiert (2026-05-05)
 
-**Ziel:** Eingetippte Zeichen lokal im ROM-Puffer akkumulieren und erst beim Enter die Zeile in die sichtbare Tilemap übertragen. Das ermöglicht In-Line-Editieren (Backspace, Cursor-Bewegung) vor dem Submit.
+Neues DP-Variable `buf_len` ($12) zählt die Zeichen in der aktuellen Eingabezeile (0–`INPUT_BUF_MAX` = 29 = `RIGHT_COL − PROMPT_COL + 1`).
 
-**Ansatz:** Separater WRAM-Puffer (z. B. 64 Bytes bei `$7E0100`) für die aktuelle Eingabezeile. Render-Pfad schreibt Zeichen in den Puffer und gleichzeitig temporär in die Tilemap (Live-Vorschau). Bei Backspace: Puffer und Tilemap-Eintrag gemeinsam zurücksetzen. Bei Enter: Puffer in die „committed"-Tilemap-Zeile übernehmen, neue Zeile beginnen, Puffer leeren.
+**Implementierung:**
+- `INPUT_BUF_MAX = 29` als Konstante oben in `main.asm`.
+- `buf_len = $12`: zeroed durch WRAM-DMA-Clear beim Boot (nicht vom expliziten DP-Zero-Loop).
+- **@scan_loop (Main-Loop):** Vor dem Setzen von `pending_flag` für Normalzeichen: wenn `buf_len >= INPUT_BUF_MAX`, Zeichen verwerfen. Für Enter/Delete (`pending_tile_hi == $FF`) gilt das Limit nicht. Bei Annahme: `inc buf_len`.
+- **@normal_tile (VBlank):** Wenn `cursor_x` nach dem Write auf 31 springt und `buf_len >= INPUT_BUF_MAX`: kein `$FFFE`-Sentinel (kein Auto-Wrap) — `cursor_x` bleibt bei 31.
+- **Cursor-Erase + Blink-Draw:** Guard `cursor_x > RIGHT_COL` → überspringen wenn `cursor_x = 31`. Das schützt das 29. Zeichen an Spalte 30 vor dem taktweisen Löschen durch den Blink-Erase-Pfad.
+- **@do_delete:** Guard geändert von `LEFT_COL` auf `PROMPT_COL` (Bug-Fix: verhindert Löschen des `>` Prompts); `dec buf_len` nach `dec cursor_x`.
+- **@do_newline:** `stz buf_len` am Anfang (vor `cursor_y`-Inkrement).
 
 ### ~~Terminal-Prompt~~ ✅ Implementiert (2026-05-02)
 
