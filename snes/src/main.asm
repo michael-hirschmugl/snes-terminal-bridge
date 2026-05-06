@@ -130,6 +130,8 @@ addr_scratch    = $0E   ; 16-bit VRAM word address scratch ($0E=low, $0F=high)
 blink_ctr       = $10   ; cursor blink counter; bit 5 drives ~1Hz blink
 auto_wrap       = $11   ; $01 = newline was triggered by line-wrap, not Enter
 buf_len         = $12   ; chars in current input line (0–INPUT_BUF_MAX); zeroed by WRAM DMA at boot
+input_buf       = $0020 ; 29-byte WRAM ASCII buffer (indices 0..buf_len-1); zeroed by WRAM DMA at boot
+line_ready      = $003D ; $01 when Enter pressed (line complete); host clears to $00 after reading
 
 ; -----------------------------------------------------------------------------
 ; CODE
@@ -612,6 +614,8 @@ reset:
 :
     dec     cursor_x
     dec     buf_len
+    ldx     buf_len
+    stz     input_buf,x         ; zero the freed ASCII slot
     jsr     calc_tilemap_addr
 
     rep     #$20
@@ -629,6 +633,10 @@ reset:
     ;             needed (BG2VOFS), clear the new row (32 tilemap words).
     ; -----------------------------------------------------------------------
 @do_newline:
+    ldx     buf_len
+    stz     input_buf,x         ; NUL-terminate at buf_len position
+    lda     #$01
+    sta     line_ready          ; signal line ready for host
     stz     buf_len             ; reset input buffer for new line
     ; cursor_y = (cursor_y + 1) & $1F
     lda     cursor_y
@@ -892,6 +900,10 @@ reset:
     cmp     #INPUT_BUF_MAX
     bcs     @scan_done          ; buf_len >= MAX → discard
     inc     buf_len
+    jsr     tile_to_ascii       ; A = ASCII byte (clobbers addr_scratch)
+    ldx     buf_len             ; X (16-bit) = buf_len after increment
+    dex                         ; X = zero-based slot index
+    sta     input_buf,x
 @set_pending:
     lda     #$01
     sta     pending_flag
@@ -911,6 +923,41 @@ reset:
     sep     #$10
     .i8
     jmp     @main_loop
+
+; =============================================================================
+; tile_to_ascii — decode pending_tile_lo ($08) / pending_tile_hi ($09) to ASCII.
+;
+; Formula (inverse of gen_keymap.py dense-pack):
+;   C_bits_5_3 = (tile_lo & $E0) >> 2
+;   C_bits_2_0 = (tile_lo >> 1) & $07
+;   C_bit_6    = pending_tile_hi & $01   (1 when tile >= 256, i.e. lowercase etc.)
+;   ascii = C_bits_5_3 | C_bits_2_0 | (C_bit_6 << 6) + $20
+;
+; Output: A = ASCII byte ($20–$7E). Clobbers addr_scratch ($0E). Preserves X, Y.
+; =============================================================================
+tile_to_ascii:
+    lda     pending_tile_lo
+    and     #$E0
+    lsr
+    lsr
+    sta     addr_scratch
+    lda     pending_tile_lo
+    lsr
+    and     #$07
+    ora     addr_scratch
+    pha
+    lda     pending_tile_hi
+    and     #$01
+    beq     @no_hi
+    pla
+    ora     #$40
+    bra     @done
+@no_hi:
+    pla
+@done:
+    clc
+    adc     #$20
+    rts
 
 ; =============================================================================
 ; print_welcome_msg — write welcome_data to VRAM during init (screen blanked).

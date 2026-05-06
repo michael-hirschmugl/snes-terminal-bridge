@@ -90,7 +90,8 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 
 ### SNES
 
-- **Direct-Page-Variablen `$00–$12`**: alle Zustandsflags, Cursor-Position, Blink-Counter, Auto-Wrap-Flag und Buffer-Länge liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `buf_len` ($12) ist die zuletzt hinzugefügte Variable; sie wird **nicht** von der expliziten Init-Zero-Schleife (`$00–$10`) abgedeckt, sondern vom WRAM-DMA-Clear beim Boot (nullt das gesamte WRAM inkl. $12).
+- **Direct-Page-Variablen `$00–$12`**: alle Zustandsflags, Cursor-Position, Blink-Counter, Auto-Wrap-Flag und Buffer-Länge liegen in DP. Der Kommentarblock oben in `main.asm` ist die verbindliche Liste. `buf_len` ($12) ist die letzte DP-Variable; sie wird **nicht** von der expliziten Init-Zero-Schleife (`$00–$10`) abgedeckt, sondern vom WRAM-DMA-Clear beim Boot (nullt das gesamte WRAM inkl. $12).
+- **WRAM ASCII-Buffer `$0020–$003D`**: Über den DP-Bereich hinaus liegen zwei neue Variablen in WRAM: `input_buf = $0020` (29 ASCII-Bytes, Indices 0..`buf_len`-1) und `line_ready = $003D` ($01 nach Enter). Beide vom WRAM-DMA-Clear auf 0 gesetzt. `input_buf` wird im Keymap-Scan befüllt (via `tile_to_ascii`-Subroutine), bei Delete geleert (Freigegebener Slot auf $00), und bei Enter NUL-terminiert + `line_ready` auf $01 gesetzt. Diese Locations können vom Host (Debugger, Python-Bridge) nach einem Enter gelesen werden, um die getippte Zeile zu parsen.
 - **Pending-Write-Queue (1 Slot)**: `pending_flag` + `pending_tile_{lo,hi}`. Lookup im aktiven Teil des Frames, Write ausschließlich im VBlank. Kein DMA für einzelne Tiles, nur für Boot-Uploads.
 - **Special-Action-Sentinels im High-Byte `$FF`**: `$FFFF` = DELETE, `$FFFE` = ENTER. In `@normal_tile` zuerst `pending_tile_hi == $FF` prüfen, dann Low-Byte unterscheiden. Auto-Wrap ist durch den Line-Input-Buffer **deaktiviert**: wenn `buf_len >= INPUT_BUF_MAX` (29) und `cursor_x` nach einem Schreibvorgang auf 31 springt, wird kein `$FFFE`-Sentinel gesetzt; stattdessen parkiert `cursor_x` bei 31 (off-screen), Blink und Cursor-Erase werden übersprungen. `@do_newline` unterscheidet weiterhin Enter (Prompt schreiben) von Auto-Wrap via `auto_wrap` ($11) — aber Auto-Wrap tritt unter normalen Bedingungen nicht mehr auf.
 - **32-row circular buffer + `BG2VOFS = (top_vram_row * 16 - 16) & $1FF`**: Tilemap ist 32×32, sichtbar 30×26 (Spalten 1–30, `LEFT_COL=1`/`RIGHT_COL=30`; Spalten 0 und 31 immer leer = linker/rechter 16px-Rand). Das `−16` im BG2VOFS verschiebt die Anzeige um 1 Tile nach unten: Tilemap-Zeile 31 (nie beschrieben) erscheint bei Screen-Y=0–15 als oberer Rand. Beim Scrollen: `top_vram_row` nachziehen, **alte** `top_vram_row`-Zeile clearen (wird neue Rand-Zeile), dann neue `cursor_y`-Zeile clearen (**je 1 Section**, 32 Word-Writes — kein Boundary-Wrap). Unterer Rand: Zeile `top_vram_row + 26` wird nie beschrieben → Screen-Y=432–447 bleibt leer.
@@ -287,6 +288,24 @@ Neues DP-Variable `buf_len` ($12) zählt die Zeichen in der aktuellen Eingabezei
 - **Cursor-Erase + Blink-Draw:** Guard `cursor_x > RIGHT_COL` → überspringen wenn `cursor_x = 31`. Das schützt das 29. Zeichen an Spalte 30 vor dem taktweisen Löschen durch den Blink-Erase-Pfad.
 - **@do_delete:** Guard geändert von `LEFT_COL` auf `PROMPT_COL` (Bug-Fix: verhindert Löschen des `>` Prompts); `dec buf_len` nach `dec cursor_x`.
 - **@do_newline:** `stz buf_len` am Anfang (vor `cursor_y`-Inkrement).
+
+### ~~WRAM ASCII Input Buffer~~ ✅ Implementiert (2026-05-06)
+
+Zeichen werden parallel zum VRAM-Tilemap-Write als rohe ASCII-Bytes in WRAM gespeichert (`input_buf = $0020`, 29 Bytes). Neue WRAM-Variable `line_ready = $003D` signalisiert dem Host eine fertige Zeile.
+
+**WRAM-Layout:**
+```
+$7E:0020–$7E:003C   input_buf   29 ASCII-Bytes (Indices 0..buf_len-1)
+$7E:003D            line_ready  $01 nach Enter; Host setzt auf $00 zurück
+```
+
+**Implementierung:**
+- `tile_to_ascii`-Subroutine: dekodiert `pending_tile_lo` ($08) und `pending_tile_hi` ($09) zurück zu ASCII — keine Änderung am Keymap-Tabellenformat nötig. Formel: `C_bits_5_3 = (tile_lo & $E0) >> 2`, `C_bits_2_0 = (tile_lo >> 1) & $07`, `C_bit_6 = pending_tile_hi & $01`, `ascii = C_bits_5_3 | C_bits_2_0 | (C_bit_6 << 6) + $20`. Verwendet nur A und `addr_scratch` ($0E), bewahrt X und Y.
+- **@scan_loop (Main-Loop):** Nach `inc buf_len` → `jsr tile_to_ascii` → `ldx buf_len; dex; sta input_buf,x`. X ist hier 16-Bit (`rep #$10` gilt für den gesamten Keymap-Scan).
+- **@do_delete (VBlank):** Nach `dec buf_len` → `ldx buf_len; stz input_buf,x`. X ist hier 8-Bit.
+- **@do_newline (VBlank):** Vor `stz buf_len` → `ldx buf_len; stz input_buf,x` (NUL-Terminierung) + `lda #$01; sta line_ready`. Danach `stz buf_len`.
+- Beide WRAM-Locations vom Boot-Zeit-DMA-Clear auf 0 gesetzt.
+- **Erweiterung auf 2 Zeilen:** `INPUT_BUF_MAX = 58` + `input_buf`-Kommentargröße auf 58 Bytes ändern, `line_ready` auf `$005A` verschieben. Auto-Wrap-Mechanismus übernimmt die visuelle Fortsetzung auf Zeile 2 ohne weitere Änderungen.
 
 ### ~~Terminal-Prompt~~ ✅ Implementiert (2026-05-02)
 

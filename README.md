@@ -112,6 +112,8 @@ The ROM receives joypad combos from the bridge, looks up the corresponding ASCII
 
 **Line input buffer:** Each input line holds up to 29 characters (columns 2–30, after the `>` prompt). When the line is full, further input is silently blocked and the cursor disappears (parked off-screen). Backspace removes the last character; Enter commits the line and opens a new prompt.
 
+**WRAM ASCII buffer:** In parallel with the VRAM tilemap display, each typed character is stored as a raw ASCII byte in WRAM at `$7E:0020` (29 bytes, `input_buf[0..buf_len-1]`). On Enter the buffer is NUL-terminated and `line_ready` (`$7E:003D`) is set to `$01`, signalling the host that a complete line is ready to read. Backspace zeroes the freed slot; `buf_len` resets to `0` after Enter. Both locations are zeroed by the boot-time WRAM DMA clear. This is the prerequisite for end-to-end line parsing from the Python bridge.
+
 **Protocol:**
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
 - ROM debounces: bitmask must be stable for ≥ 2 consecutive VBlanks (~33 ms) before triggering
@@ -177,6 +179,7 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 | ~~**Welcome message**~~ | ✅ Displayed at boot from `config/welcome.ini` — `gen_welcome.py` converts it to tile words at build time; `print_welcome_msg` writes directly to VRAM before screen enable (2026-05-01). |
 | ~~**Terminal prompt**~~ | ✅ `>` prepended to each new input line; cursor starts at column 2 (2026-05-02). |
 | ~~**Line input buffer**~~ | ✅ 29-char limit per line (columns 2–30); input blocked when full, cursor hidden; Backspace decrements counter; Enter resets it (2026-05-05). |
+| ~~**WRAM ASCII input buffer**~~ | ✅ Characters stored as raw ASCII bytes in WRAM `$7E:0020` (29 bytes) live as typed; `line_ready` flag at `$7E:003D` set on Enter with NUL terminator; Backspace zeroes freed slot. `tile_to_ascii` subroutine decodes tile indices to ASCII without changing the keymap table format (2026-05-06). |
 
 ### Building the ROM
 
