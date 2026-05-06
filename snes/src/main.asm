@@ -638,107 +638,17 @@ reset:
     lda     #$01
     sta     line_ready          ; signal line ready for host
     stz     buf_len             ; reset input buffer for new line
-    ; cursor_y = (cursor_y + 1) & $1F
-    lda     cursor_y
-    inc     a
-    and     #$1F
-    sta     cursor_y
+    jsr     newline_advance     ; cursor_y++, scroll if needed, clear new row
 
-    ; visible_offset = (cursor_y - top_vram_row) & $1F
-    ; if >= VISIBLE_ROWS: scroll viewport
-    sec
-    sbc     top_vram_row
-    and     #$1F
-    cmp     #VISIBLE_ROWS
-    bcc     @newline_no_scroll
-
-    ; top_vram_row = (cursor_y - (VISIBLE_ROWS - 1)) & $1F
-    lda     cursor_y
-    sec
-    sbc     #(VISIBLE_ROWS - 1)
-    and     #$1F
-    sta     top_vram_row
-
-    ; BG2VOFS = (top_vram_row * 16 - 16) & $1FF
-    ; -16 shifts display down 1 row: row 31 (blank) appears at screen top.
-    ; When top_vram_row=0: $0000 - $0010 = $FFF0 & $01FF = $01F0 -> row 31 ✓
-    rep     #$20
-    .a16
-    lda     top_vram_row
-    and     #$00FF
-    asl
-    asl
-    asl
-    asl                          ; * 16
-    sec
-    sbc     #$0010               ; - 16
-    and     #$01FF               ; mask to 9 bits
-    sep     #$20
-    .a8
-    sta     BG2VOFS              ; low byte
-    xba
-    sta     BG2VOFS              ; high byte
-
-    ; Clear old top_vram_row (= new blank margin row now visible at screen top).
-    ; old_top_vram_row = (cursor_y - VISIBLE_ROWS) & $1F
-    rep     #$20
-    .a16
-    lda     cursor_y
-    and     #$001F
-    sec
-    sbc     #VISIBLE_ROWS
-    and     #$001F               ; old_top_vram_row
-    asl
-    asl
-    asl
-    asl
-    asl                          ; * 32
-    clc
-    adc     #TILEMAP_WORD
-    sta     VMADDL
-    sep     #$20
-    .a8
-
-    ldx     #32
-@cl_margin_row:
-    stz     VMDATAL
-    stz     VMDATAH
-    dex
-    bne     @cl_margin_row
-
-@newline_no_scroll:
-
-    ; --- Clear new tilemap row: 32 sequential word writes --------------------
-    ; addr = TILEMAP_WORD + (cursor_y & $1F) * 32
-    rep     #$20
-    .a16
-    lda     cursor_y
-    and     #$001F
-    asl
-    asl
-    asl
-    asl
-    asl                          ; * 32
-    clc
-    adc     #TILEMAP_WORD
-    sta     VMADDL               ; 16-bit store sets VMADDL + VMADDH
-    sep     #$20
-    .a8
-
-    ldx     #32
-@cl_row:
-    stz     VMDATAL
-    stz     VMDATAH
-    dex
-    bne     @cl_row
-
-    lda     auto_wrap
+    lda     auto_wrap           ; auto-wrap: cursor_x = LEFT_COL already, skip prompt
     stz     auto_wrap
-    beq     :+                  ; not auto-wrap → print prompt
-    lda     #LEFT_COL           ; auto-wrap: reset cursor without prompt
-    sta     cursor_x
-    bra     @no_pending
-:   jsr     print_prompt        ; Enter only: print ">" and set cursor_x = PROMPT_COL
+    bne     @no_pending
+    lda     #$8F                ; force blank: covers dispatch_command + print_prompt
+    sta     INIDISP
+    jsr     dispatch_command    ; Enter only: check command, output response
+    jsr     print_prompt        ; print ">" and set cursor_x = PROMPT_COL
+    lda     #$0F                ; restore display
+    sta     INIDISP
     bra     @no_pending
 
 @no_pending:
@@ -1045,6 +955,204 @@ print_prompt:
     sta     cursor_x
     rts
 
+; =============================================================================
+; newline_advance — increment cursor_y, scroll viewport if needed, clear new row.
+;
+; Called from @do_newline (Enter key) and print_help_response ($FFFF marker).
+; Must be called during VBlank (direct VRAM + BG2VOFS writes).
+; Entry: A=8-bit, VMAIN=$80.
+; Exit:  A=8-bit, X clobbered, cursor_x = LEFT_COL.
+; =============================================================================
+
+newline_advance:
+    ; cursor_y = (cursor_y + 1) & $1F
+    lda     cursor_y
+    inc     a
+    and     #$1F
+    sta     cursor_y
+
+    ; visible_offset = (cursor_y - top_vram_row) & $1F
+    ; if >= VISIBLE_ROWS: scroll viewport
+    sec
+    sbc     top_vram_row
+    and     #$1F
+    cmp     #VISIBLE_ROWS
+    bcc     @na_no_scroll
+
+    ; top_vram_row = (cursor_y - (VISIBLE_ROWS - 1)) & $1F
+    lda     cursor_y
+    sec
+    sbc     #(VISIBLE_ROWS - 1)
+    and     #$1F
+    sta     top_vram_row
+
+    ; BG2VOFS = (top_vram_row * 16 - 16) & $1FF
+    ; -16 shifts display down 1 row: row 31 (blank) appears at screen top.
+    ; When top_vram_row=0: $0000 - $0010 = $FFF0 & $01FF = $01F0 -> row 31 ✓
+    rep     #$20
+    .a16
+    lda     top_vram_row
+    and     #$00FF
+    asl
+    asl
+    asl
+    asl                          ; * 16
+    sec
+    sbc     #$0010               ; - 16
+    and     #$01FF               ; mask to 9 bits
+    sep     #$20
+    .a8
+    sta     BG2VOFS              ; low byte
+    xba
+    sta     BG2VOFS              ; high byte
+
+    ; Clear old top_vram_row (= new blank margin row now visible at screen top).
+    ; old_top_vram_row = (cursor_y - VISIBLE_ROWS) & $1F
+    rep     #$20
+    .a16
+    lda     cursor_y
+    and     #$001F
+    sec
+    sbc     #VISIBLE_ROWS
+    and     #$001F               ; old_top_vram_row
+    asl
+    asl
+    asl
+    asl
+    asl                          ; * 32
+    clc
+    adc     #TILEMAP_WORD
+    sta     VMADDL
+    sep     #$20
+    .a8
+
+    ldx     #32
+@na_cl_margin:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @na_cl_margin
+
+@na_no_scroll:
+
+    ; Clear new tilemap row: 32 sequential word writes
+    ; addr = TILEMAP_WORD + (cursor_y & $1F) * 32
+    rep     #$20
+    .a16
+    lda     cursor_y
+    and     #$001F
+    asl
+    asl
+    asl
+    asl
+    asl                          ; * 32
+    clc
+    adc     #TILEMAP_WORD
+    sta     VMADDL
+    sep     #$20
+    .a8
+
+    ldx     #32
+@na_cl_row:
+    stz     VMDATAL
+    stz     VMDATAH
+    dex
+    bne     @na_cl_row
+
+    lda     #LEFT_COL
+    sta     cursor_x
+    rts
+
+; =============================================================================
+; dispatch_command — check input_buf for known commands and execute them.
+;
+; Called from @do_newline on Enter (after newline_advance, before print_prompt).
+; Entry: A=8-bit, input_buf = NUL-terminated command string.
+; Exit:  A=8-bit; cursor_y/cursor_x updated if a command printed output.
+; =============================================================================
+
+dispatch_command:
+    lda     input_buf+0
+    cmp     #'h'
+    bne     @dc_done
+    lda     input_buf+1
+    cmp     #'e'
+    bne     @dc_done
+    lda     input_buf+2
+    cmp     #'l'
+    bne     @dc_done
+    lda     input_buf+3
+    cmp     #'p'
+    bne     @dc_done
+    lda     input_buf+4
+    bne     @dc_done
+    jsr     print_help_response
+@dc_done:
+    rts
+
+; =============================================================================
+; print_help_response — write help_data to VRAM during VBlank.
+;
+; Like print_welcome_msg but calls newline_advance for $FFFF entries so the
+; viewport scrolls correctly mid-session.  X is saved/restored across each
+; newline_advance call (which clobbers X as a loop counter).
+;
+; Entry: A=8-bit, cursor at current position (start of a blank row).
+; Exit:  A=8-bit, X=8-bit; cursor_y on a fresh empty row (help_data ends with
+;        $FFFF before sentinel, so newline_advance runs last).
+; =============================================================================
+
+print_help_response:
+    rep     #$10
+    .i16
+    ldx     #$0000
+@ph_loop:
+    rep     #$20
+    .a16
+    lda     help_data,x
+    sep     #$20
+    .a8
+    sta     pending_tile_lo
+    xba
+    sta     pending_tile_hi
+    lda     pending_tile_lo
+    ora     pending_tile_hi
+    beq     @ph_done            ; $0000 = sentinel
+    lda     pending_tile_lo
+    and     pending_tile_hi
+    cmp     #$FF
+    beq     @ph_nl              ; $FFFF = newline
+    inx
+    inx
+    jsr     calc_tilemap_addr
+    rep     #$20
+    .a16
+    lda     addr_scratch
+    sta     VMADDL
+    sep     #$20
+    .a8
+    lda     pending_tile_lo
+    sta     VMDATAL
+    lda     pending_tile_hi
+    sta     VMDATAH
+    inc     cursor_x
+    bra     @ph_loop
+@ph_nl:
+    inx
+    inx
+    phx                         ; save 16-bit table offset
+    sep     #$10                ; newline_advance assembled with X8 encoding (ldx #32 = 1-byte imm)
+    .i8
+    jsr     newline_advance
+    rep     #$10                ; back to X16 before restoring table offset
+    .i16
+    plx
+    bra     @ph_loop
+@ph_done:
+    sep     #$10
+    .i8
+    rts
+
 ; -----------------------------------------------------------------------------
 ; Data
 ; -----------------------------------------------------------------------------
@@ -1077,6 +1185,9 @@ keymap_data:
 
 welcome_data:
 .include "../assets/welcome.inc"
+
+help_data:
+.include "../assets/help.inc"
 
 ; -----------------------------------------------------------------------------
 ; SNES internal header  ($FFC0-$FFE3)

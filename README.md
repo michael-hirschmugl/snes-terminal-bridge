@@ -58,7 +58,8 @@ snes_terminal_bridge/
 config/
 ├── mappings.yaml          # ASCII → SNES button combinations (97 characters mapped)
 ├── keyboard_mappings.yaml # SNES button → emulator keyboard key
-└── welcome.ini            # Boot welcome message (plain text, ≤26 lines, ≤30 chars each)
+├── welcome.ini            # Boot welcome message (plain text, ≤26 lines, ≤30 chars each, `;`/`#` = comment)
+└── help.ini               # Help text for `help` command (plain text, ≤30 chars/line, `;`/`#` = comment)
 
 assets/
 └── SNES-ASCII-Map.ods  # Reference spreadsheet: all 128 ASCII chars mapped to SNES combos
@@ -82,6 +83,7 @@ snes/
     ├── gen_keymap.py      # Reads mappings.yaml → keymap.inc (with priority=1/palette=7 bits)
     ├── gen_border.py      # Generates BG1 retro border frame → palette.bin + tiles.4bpp.chr + tilemap.bin
     ├── gen_welcome.py     # Reads config/welcome.ini → welcome.inc (tile words for boot message)
+    ├── gen_help.py        # Reads config/help.ini → help.inc (tile words for `help` command output)
     ├── gen_assets.py      # PNG → 4bpp palette/tiles/tilemap binaries (mode5_image pipeline; dev use)
     ├── crop_image.py      # Image scaling/cropping helper used by gen_assets.py
     ├── fix_checksum.py    # Post-link SNES-header checksum patcher
@@ -113,6 +115,8 @@ The ROM receives joypad combos from the bridge, looks up the corresponding ASCII
 **Line input buffer:** Each input line holds up to 29 characters (columns 2–30, after the `>` prompt). When the line is full, further input is silently blocked and the cursor disappears (parked off-screen). Backspace removes the last character; Enter commits the line and opens a new prompt.
 
 **WRAM ASCII buffer:** In parallel with the VRAM tilemap display, each typed character is stored as a raw ASCII byte in WRAM at `$7E:0020` (29 bytes, `input_buf[0..buf_len-1]`). On Enter the buffer is NUL-terminated and `line_ready` (`$7E:003D`) is set to `$01`, signalling the host that a complete line is ready to read. Backspace zeroes the freed slot; `buf_len` resets to `0` after Enter. Both locations are zeroed by the boot-time WRAM DMA clear. This is the prerequisite for end-to-end line parsing from the Python bridge.
+
+**Command dispatch:** Typing a known command and pressing Enter outputs a response directly on the SNES screen — no host involved. Currently implemented: `help` (displays the contents of `config/help.ini`). Unknown commands produce no output. Multi-line output is handled via INIDISP force-blank in `@do_newline` so all VRAM writes succeed regardless of VBlank timing. New commands are added to `dispatch_command` in `main.asm`; their text content follows the `config/*.ini` → `gen_*.py` → `assets/*.inc` pipeline.
 
 **Protocol:**
 - Each character is encoded as a unique joypad bitmask (SNES buttons held simultaneously for ~80 ms)
@@ -180,6 +184,7 @@ In `keymap.inc` entries (`.word bitmask, .word tile`), the bitmask is stored lit
 | ~~**Terminal prompt**~~ | ✅ `>` prepended to each new input line; cursor starts at column 2 (2026-05-02). |
 | ~~**Line input buffer**~~ | ✅ 29-char limit per line (columns 2–30); input blocked when full, cursor hidden; Backspace decrements counter; Enter resets it (2026-05-05). |
 | ~~**WRAM ASCII input buffer**~~ | ✅ Characters stored as raw ASCII bytes in WRAM `$7E:0020` (29 bytes) live as typed; `line_ready` flag at `$7E:003D` set on Enter with NUL terminator; Backspace zeroes freed slot. `tile_to_ascii` subroutine decodes tile indices to ASCII without changing the keymap table format (2026-05-06). |
+| ~~**`help` command**~~ | ✅ Typing `help` + Enter displays the contents of `config/help.ini` on screen. `dispatch_command` checks `input_buf` for exact matches; `print_help_response` streams word entries; `newline_advance` subroutine shared between command output and normal newline. Force-blank (INIDISP=$8F) in `@do_newline` covers all multi-line output. Pipeline: `config/help.ini` → `snes/tools/gen_help.py` → `snes/assets/help.inc` (2026-05-06). |
 
 ### Building the ROM
 

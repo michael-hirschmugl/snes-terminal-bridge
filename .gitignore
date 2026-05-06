@@ -20,5 +20,6 @@ snes/build/
 snes/assets/font.inc
 snes/assets/keymap.inc
 snes/assets/welcome.inc
+snes/assets/help.inc
 snes/assets/font_preview.png
 snes/tools/.venv/

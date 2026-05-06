@@ -23,6 +23,7 @@ KEYMAP      := assets/keymap.inc
 
 BORDER_STAMP := build/mode5_border_4bpp/tilemap.bin
 WELCOME      := assets/welcome.inc
+HELP         := assets/help.inc
 
 TOOLS_VENV   := tools/.venv
 TOOLS_PYTHON := $(TOOLS_VENV)/bin/python
@@ -38,7 +39,7 @@ $(ROM): $(OBJ) snes.cfg tools/fix_checksum.py | build
 	@echo "ROM: $@ ($$(wc -c < $@) bytes)"
 
 # ---- Assemble ----
-$(OBJ): $(ASM_SRC) $(FONT) $(KEYMAP) $(BORDER_STAMP) $(WELCOME) | build
+$(OBJ): $(ASM_SRC) $(FONT) $(KEYMAP) $(BORDER_STAMP) $(WELCOME) $(HELP) | build
 	ca65 --cpu 65816 -o $@ $<
 
 # ---- Font + keymap generation ----
@@ -57,6 +58,10 @@ $(BORDER_STAMP): tools/gen_border.py | $(TOOLS_VENV) build
 # ---- Welcome message generation ----
 $(WELCOME): tools/gen_welcome.py ../config/welcome.ini | $(TOOLS_VENV)
 	$(TOOLS_PYTHON) tools/gen_welcome.py
+
+# ---- Help text generation ----
+$(HELP): tools/gen_help.py ../config/help.ini | $(TOOLS_VENV)
+	$(TOOLS_PYTHON) tools/gen_help.py
 
 $(TOOLS_VENV): tools/requirements.txt
 	python3 -m venv $(TOOLS_VENV)

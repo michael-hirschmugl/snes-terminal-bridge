@@ -101,6 +101,17 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
 - **Boot-Guard (`boot_ready`)**: ROM verwirft jegliche Eingabe, bis einmal alle Buttons = 0 war. Schutz gegen „hängenden Key aus Vorsession".
 - **`TM = TS = $03`**: Beide BG-Layer (BG1 Retro-Rahmen + BG2 Text) müssen auf **Main- und Sub-Screen** gleichzeitig aktiv sein. Hi-Res teilt gerade/ungerade Pixelspalten zwischen beiden Screens auf; fehlt einer, sieht man nur jede zweite Spalte. Dasselbe gilt für das Interlace-Bit (`SETINI = $01`) — ohne bleibt die Auflösung bei 224 Zeilen, Glyphen wirken doppelt so hoch gestaucht.
 - **A/X Register-Breitenwechsel explizit kommentieren** (`.a8` / `.a16`, `.i8` / `.i16`). Jeder `rep`/`sep` muss paarig sein, inkl. Sprünge aus dem breiten Bereich heraus.
+- **`newline_advance`-Subroutine (Entry: A=8-bit, X=8-bit):** Kapselt cursor_y-Increment (mod 32), Viewport-Scroll (top_vram_row + BG2VOFS), alte Rand-Zeile leeren, neue Zeile leeren, cursor_x=LEFT_COL. Geteilt zwischen `@do_newline` (Enter/Auto-Wrap) und `print_help_response` (Newline-Marker `$FFFF`). **Wichtig:** `ldx #32` ist ein 1-Byte-Immediate (X8-Encoding von `ca65`). Aufruf aus 16-Bit-X-Kontext ohne vorheriges `sep #$10` führt zu katastrophalem Mis-Decode. Jeder Caller muss `sep #$10 / .i8` vor dem `jsr newline_advance` stellen (und danach `rep #$10 / .i16` um den Zustand wiederherzustellen).
+- **`dispatch_command` + `print_help_response`:** `dispatch_command` prüft `input_buf` (DP $0020) per Byte-Vergleich auf exakte NUL-terminierte Übereinstimmung. `print_help_response` streamt `help_data` (`.word`-Einträge) mit 16-Bit-X-Index: `$FFFF` = `PHX / sep #$10 / jsr newline_advance / rep #$10 / PLX`, `$0000` = Sentinel. Kein Force-Blank innerhalb der Subroutine — der Caller in `@do_newline` übernimmt das.
+- **Force-Blank für Bulk-VRAM-Output (INIDISP=$8F):** bsnes-plus verwirft VRAM-Writes außerhalb VBlank. Eine 7-zeilige Ausgabe (~24.000 Zyklen) übersteigt das PAL-VBlank-Fenster (~12.400 Zyklen) bei weitem. Lösung: INIDISP Bit 7 setzen macht VRAM jederzeit beschreibbar. Pattern: **im Caller** (`@do_newline`), nicht im Callee — und so, dass es `dispatch_command` + `print_prompt` gemeinsam abdeckt. Force-Blank nur in der Output-Subroutine: `print_prompt`'s VRAM-Write bleibt außerhalb und wird verworfen. Kanonisches Pattern:
+  ```asm
+      lda     #$8F        ; force blank
+      sta     INIDISP
+      jsr     dispatch_command
+      jsr     print_prompt
+      lda     #$0F        ; display on
+      sta     INIDISP
+  ```
 
 ### Build / Code-Gen
 
@@ -134,6 +145,10 @@ Keine IRQs, kein NMI — Synchronisation ausschließlich über `HVBJOY`.
   - `assets/welcome.inc` — Sequenz von `.word`-Einträgen: pro Zeichen `0x3C00 | N(C)` (dasselbe Tilemap-Wort wie `keymap.inc`), `$FFFF` als Zeilenvorschub-Marker, `$0000` als End-Sentinel. Werden zur Init-Zeit von `print_welcome_msg` direkt (ohne VBlank-Queue) in den BG2-Tilemap-VRAM geschrieben, bevor `INIDISP = $0F` die Anzeige aktiviert.
   - Grenzen (hartes `sys.exit` bei Überschreitung): max. 26 Zeilen (`VISIBLE_ROWS`), max. 30 Zeichen pro Zeile (`USABLE_COLS`), nur ASCII `0x20–0x7E`.
   - Make-Abhängigkeit: `$(WELCOME)` hängt von `../config/welcome.ini` ab, sodass `make` bei einer Änderung der Nachricht automatisch neu baut.
+- **`gen_help.py` erzeugt ein Artefakt** aus `config/help.ini` (identisches Format wie `welcome.ini`, aber kein Zeilenlimit):
+  - `assets/help.inc` — identisches `.word`-Format wie `welcome.inc`. Wird von `print_help_response` gestreamt: `$FFFF` = Newline (ruft `newline_advance`), `$0000` = Sentinel (fertig).
+  - Kein `MAX_LINES`-Limit (im Unterschied zu `gen_welcome.py`), aber `MAX_COLS=30` gilt gleichermaßen. `;`/`#`-Zeilen werden als Kommentare übersprungen — für optische Trennlinien `-` oder `=` verwenden, **nicht** `#`.
+  - Make-Abhängigkeit: `$(HELP)` hängt von `../config/help.ini` ab.
 - **Post-Link-Checksum-Patch**: nach `ld65` läuft zwingend `python3 tools/fix_checksum.py <rom>`. Der Linker kann die Checksumme nicht berechnen, weil sie sich selbst enthält — das Script setzt erst `complement=$FFFF`, `checksum=$0000`, summiert alle Bytes (mod `$10000`), schreibt `checksum` an `$FFDE/$FFDF` und `complement = checksum XOR $FFFF` an `$FFDC/$FFDD`. Ohne den Patch lehnen Flash-Cartridges das ROM ab. Der Makefile koppelt den Schritt ans Linken — **nicht** entfernen oder nur einzeln `ld65` aufrufen.
 
 ### SNES-Header (Pflichtfelder, `main.asm` → Segment `HEADER`)
@@ -212,7 +227,7 @@ Wenn sich die ROM-Größe ändert (z. B. zu 64 KiB), müssen `$FFD7` **und** `sn
 
 ### SNES / ASM
 
-- **VRAM-Writes außerhalb VBlank** → Grafikkorruption. Alle Tile-Writes hinter `@wait_vblank` halten.
+- **VRAM-Writes außerhalb VBlank** → Grafikkorruption. Normale Tile-Writes gehören hinter `@wait_vblank`. Für Bulk-Output (mehrere Zeilen, z.B. `print_help_response`) ist das VBlank-Fenster (~12.400 Zyklen PAL) zu klein — Force-Blank verwenden: `lda #$8F; sta INIDISP` vor dem Output, `lda #$0F; sta INIDISP` danach. Das Pattern muss im **Caller** gesetzt werden und alle zusammengehörigen VRAM-Writes (inkl. `print_prompt` danach) einschließen. Nie nur in der Output-Subroutine selbst, sonst wird der Prompt-Write außerhalb des Force-Blank-Fensters verworfen.
 - **A/X-Registerbreite vergessen umzuschalten** → Stack-Korruption oder zufällige Hochbytes. Jeder `rep #$20` braucht `.a16` + späteres `sep #$20` + `.a8`. Analog `rep #$10` / `sep #$10` für X/Y.
 - **Neue Special-Action vergessen in `gen_keymap.py:SPECIAL_ACTIONS` einzutragen** → wird in `@normal_tile` als gültiger Tile-Index behandelt und schreibt Schrott in VRAM. Sentinels leben im Bereich `$FF00–$FFFF` (High-Byte = `$FF`); neue Aktionen dort anhängen + in `main.asm` den `@normal_tile`-Switch ergänzen.
 - **Keymap-Reihenfolge irrelevant, aber Sentinel `$0000,$0000` muss existieren** — `@scan_loop` stoppt sonst nie. `gen_keymap.py` schreibt ihn automatisch ans Ende.
@@ -289,6 +304,17 @@ Neues DP-Variable `buf_len` ($12) zählt die Zeichen in der aktuellen Eingabezei
 - **@do_delete:** Guard geändert von `LEFT_COL` auf `PROMPT_COL` (Bug-Fix: verhindert Löschen des `>` Prompts); `dec buf_len` nach `dec cursor_x`.
 - **@do_newline:** `stz buf_len` am Anfang (vor `cursor_y`-Inkrement).
 
+### ~~`help`-Command~~ ✅ Implementiert (2026-05-06)
+
+Typing `help` + Enter outputs multi-line help text directly on the SNES screen.
+
+**Implementierung:**
+- `dispatch_command`: Prüft NUL-terminierten `input_buf` auf exakte String-Übereinstimmung, ruft den Handler auf (`print_help_response` für `help`).
+- `print_help_response`: Streamt `help_data`-Words (`.inc`-Datei) mit 16-Bit-X-Index. `$FFFF` → `PHX / sep #$10 / jsr newline_advance / rep #$10 / PLX`. `$0000` → Sentinel.
+- `newline_advance`: Aus `@do_newline` extrahierte Subroutine; shared zwischen Enter-Pfad und Command-Output. Eintritt zwingend A=8-bit, X=8-bit.
+- Force-Blank: `@do_newline` setzt `INIDISP=$8F` vor `dispatch_command + print_prompt`, stellt `$0F` danach wieder her. Gilt für alle zukünftigen Commands automatisch.
+- Pipeline: `config/help.ini` → `snes/tools/gen_help.py` → `snes/assets/help.inc`. Kommentarzeilen (`;`/`#`) werden entfernt; Trennlinien als `-`/`=` schreiben.
+
 ### ~~WRAM ASCII Input Buffer~~ ✅ Implementiert (2026-05-06)
 
 Zeichen werden parallel zum VRAM-Tilemap-Write als rohe ASCII-Bytes in WRAM gespeichert (`input_buf = $0020`, 29 Bytes). Neue WRAM-Variable `line_ready = $003D` signalisiert dem Host eine fertige Zeile.
@@ -331,3 +357,5 @@ $7E:003D            line_ready  $01 nach Enter; Host setzt auf $00 zurück
 7. Mode-5-Layout-Änderung (VRAM-Adressen, Dense-Pack-Formel, Interlace-Flag, 16×16-Read-Pattern)? → **immer** zuerst [`AI-MODE-5-README.md`](AI-MODE-5-README.md) lesen. Diese Datei dokumentiert das PPU-Verhalten, auf dem `gen_font.py` + `gen_keymap.py` + `main.asm` aufsetzen. Änderungen müssen zu den dort beschriebenen Invarianten passen.
 8. Eines der geplanten Features aus Abschnitt 5 umsetzen? → Vor der Umsetzung Abschnitt 5 lesen; das 8×16-Feature ist ein dokumentierter Dead End und darf nicht nochmal versucht werden.
 9. **Welcome-Message geändert** (`config/welcome.ini` editiert)? → `cd snes && make` reicht — die Makefile-Abhängigkeit auf `../config/welcome.ini` triggert `gen_welcome.py` automatisch. Kein manuelles `make font` nötig. Grenzen (`≤26 Zeilen`, `≤30 Zeichen/Zeile`, ASCII `0x20–0x7E`) werden bei Build-Zeit geprüft.
+10. **Help-Text geändert** (`config/help.ini` editiert)? → `cd snes && make` reicht — Makefile-Abhängigkeit auf `../config/help.ini` triggert `gen_help.py` automatisch. Kein Zeilenlimit, aber `≤30 Zeichen/Zeile`. `;`/`#`-Zeilen = Kommentare (werden entfernt) — für Trennlinien `-` oder `=` verwenden.
+11. **Neues Command in `dispatch_command`?** → `main.asm` (`dispatch_command`-Subroutine erweitern) + ggf. neues `config/*.ini` + neues `snes/tools/gen_*.py` + Makefile-Abhängigkeit ergänzen. Force-Blank in `@do_newline` deckt alle Commands automatisch ab — **kein** zusätzliches Force-Blank in der neuen Output-Subroutine.
