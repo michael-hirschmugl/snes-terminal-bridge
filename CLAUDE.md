@@ -170,8 +170,9 @@ Everything is implemented and working. Tested scenarios:
 ## Open Items
 
 - [ ] Test Scenario 2: native Linux X11 on Zorin OS
-- [ ] End-to-end test: type `Hello World` → correct characters appear in SNES program
+- [x] End-to-end test: type `Hello World` → correct characters appear in SNES program — confirmed working 2026-05-06
 - [ ] Start/Select as standalone keys in `mappings.yaml` (currently only used in combos)
+- [ ] Verify WRAM line input buffer: confirm exact address (`$7E:0020`) and correct ASCII content via debugger/memory viewer after typing a line
 - [x] Flash-cart / hardware test of `terminal.sfc` (interlaced Mode 5 on real PAL SNES) — tested 2026-04-23, working
 
 ### SNES ROM — planned features
